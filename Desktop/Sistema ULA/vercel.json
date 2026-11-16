@@ -1,14 +1,22 @@
 {
   "rewrites": [
     {
+      "source": "/api/send-email",
+      "destination": "/api/send-email"
+    },
+    {
+      "source": "/api/incidencias/exportar-email",
+      "destination": "/api/send-email"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://sistema-ula-backend.onrender.com/api/:path*"
     },
     {
       "source": "/upload-pdf",
       "destination": "https://sistema-ula-backend.onrender.com/upload-pdf"
-    }
-    ,{
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

@@ -6690,9 +6690,9 @@ def descargar_reporte_compartido(report_id: str):
                     row = cursor.fetchone()
                     if row:
                         data = {
-                            "nombre_archivo": row[0],
-                            "tipo": row[1],
-                            "contenido": row[2]
+                            "nombre_archivo": row["nombre_archivo"] if isinstance(row, dict) else row[0],
+                            "tipo": row["tipo"] if isinstance(row, dict) else row[1],
+                            "contenido": row["contenido"] if isinstance(row, dict) else row[2],
                         }
                         REPORTES_COMPARTIDOS_CACHE[report_id] = data
         except Exception as e:
@@ -10121,6 +10121,32 @@ class ExportarIncidenciasEmailRequest(BaseModel):
     usuario_correo: Optional[str] = ""
 
 
+def _detectar_url_vercel_relay(request: Request) -> Optional[str]:
+    """Obtiene la URL del endpoint /api/send-email en Vercel a partir de headers o variables de entorno."""
+    from urllib.parse import urlparse
+
+    relay_env = (os.getenv("VERCEL_RELAY_URL", "") or os.getenv("FRONTEND_URL", "")).strip()
+    if relay_env:
+        base = relay_env.rstrip("/")
+        return base if base.endswith("/api/send-email") else f"{base}/api/send-email"
+
+    vercel_url = os.getenv("VERCEL_URL", "").strip()
+    if vercel_url:
+        base = vercel_url if vercel_url.startswith(("http://", "https://")) else f"https://{vercel_url}"
+        return f"{base.rstrip('/')}/api/send-email"
+
+    for header_name in ("origin", "referer"):
+        header_val = (request.headers.get(header_name) or "").strip()
+        if not header_val:
+            continue
+        parsed = urlparse(header_val)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme in ("http", "https") and parsed.netloc and host not in ("localhost", "127.0.0.1"):
+            return f"{parsed.scheme}://{parsed.netloc}/api/send-email"
+
+    return None
+
+
 @app.post("/api/incidencias/exportar-email")
 def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Request):
     destinos = [d.strip() for d in req.destinatarios.replace(';', ',').split(',') if d.strip()]
@@ -10257,37 +10283,37 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
     smtp_port = int(os.getenv("SMTP_PORT", 587))
     smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "") or "from lcxt muzd wugb").strip()
 
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    msg = MIMEMultipart()
+    msg['From'] = f"SIPREF Incidencias <{sender_email}>"
+    msg['To'] = ", ".join(destinos)
+    if cc_list:
+        msg['Cc'] = ", ".join(cc_list)
+    msg['Subject'] = asunto
+    msg.attach(MIMEText(body_html, 'html'))
+
+    if pdf_bytes:
+        part = MIMEBase('application', 'pdf')
+        part.set_payload(pdf_bytes)
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{filename_pdf}"')
+        msg.attach(part)
+
+    if xlsx_bytes:
+        part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        part.set_payload(xlsx_bytes)
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f'attachment; filename="{filename_xlsx}"')
+        msg.attach(part)
+
+    all_recipients = list(destinos) + list(cc_list) + list(cco_list)
     enviado_exitoso = False
     error_smtp = None
 
     if sender_email and smtp_pass:
         try:
-            from email.mime.base import MIMEBase
-            from email import encoders
-
-            msg = MIMEMultipart()
-            msg['From'] = f"SIPREF Incidencias <{sender_email}>"
-            msg['To'] = ", ".join(destinos)
-            if cc_list:
-                msg['Cc'] = ", ".join(cc_list)
-            msg['Subject'] = asunto
-            msg.attach(MIMEText(body_html, 'html'))
-
-            if pdf_bytes:
-                part = MIMEBase('application', 'pdf')
-                part.set_payload(pdf_bytes)
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{filename_pdf}"')
-                msg.attach(part)
-
-            if xlsx_bytes:
-                part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-                part.set_payload(xlsx_bytes)
-                encoders.encode_base64(part)
-                part.add_header('Content-Disposition', f'attachment; filename="{filename_xlsx}"')
-                msg.attach(part)
-
-            all_recipients = list(destinos) + list(cc_list) + list(cco_list)
             # Timeout corto (4s) para detectar rápidamente si Render bloquea el puerto SMTP
             with smtplib.SMTP(smtp_host, smtp_port, timeout=4.0) as server:
                 server.starttls()
@@ -10297,12 +10323,38 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
             print("Reporte de incidencias enviado exitosamente vía SMTP directo.")
         except Exception as e:
             error_smtp = str(e)
-            print(f"SMTP directo no disponible o bloqueado en la nube ({e}). Intentando fallback HTTP vía EmailJS...")
+            print(f"SMTP directo no disponible o bloqueado en la nube ({e}). Intentando relay Vercel / fallback HTTP...")
 
-    # Si SMTP no funcionó (común en Render por bloqueo de puertos 587/465), enviar vía EmailJS (puerto 443 HTTPS)
+    # Si SMTP directo falla en Render, intentar relay /api/send-email en Vercel para conservar adjuntos
+    if not enviado_exitoso:
+        relay_url = _detectar_url_vercel_relay(request)
+        if relay_url:
+            try:
+                import base64
+                relay_payload = json.dumps({
+                    "raw_mime_b64": base64.b64encode(msg.as_bytes()).decode("ascii"),
+                    "recipients": all_recipients,
+                    "from_email": sender_email,
+                }).encode("utf-8")
+                relay_req = urllib.request.Request(
+                    relay_url,
+                    data=relay_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "SIPREF-Backend/1.0",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(relay_req, timeout=15.0) as relay_res:
+                    if relay_res.status == 200:
+                        enviado_exitoso = True
+                        print(f"Reporte de incidencias enviado exitosamente vía relay Vercel ({relay_url}).")
+            except Exception as e_relay:
+                print(f"Relay Vercel falló ({e_relay}), intentando fallback HTTP vía EmailJS...")
+
+    # Si SMTP y relay Vercel no funcionaron, enviar vía EmailJS (puerto 443 HTTPS)
     if not enviado_exitoso:
         try:
-            all_recipients = list(destinos) + list(cc_list) + list(cco_list)
             for dest in all_recipients:
                 _enviar_smtp(dest, asunto, body_html)
             enviado_exitoso = True
