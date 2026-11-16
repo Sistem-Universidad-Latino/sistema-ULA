@@ -10121,6 +10121,32 @@ class ExportarIncidenciasEmailRequest(BaseModel):
     usuario_correo: Optional[str] = ""
 
 
+def _detectar_url_vercel_relay(request: Request) -> Optional[str]:
+    """Obtiene la URL del endpoint /api/send-email en Vercel a partir de headers o variables de entorno."""
+    from urllib.parse import urlparse
+
+    relay_env = (os.getenv("VERCEL_RELAY_URL", "") or os.getenv("FRONTEND_URL", "")).strip()
+    if relay_env:
+        base = relay_env.rstrip("/")
+        return base if base.endswith("/api/send-email") else f"{base}/api/send-email"
+
+    vercel_url = os.getenv("VERCEL_URL", "").strip()
+    if vercel_url:
+        base = vercel_url if vercel_url.startswith(("http://", "https://")) else f"https://{vercel_url}"
+        return f"{base.rstrip('/')}/api/send-email"
+
+    for header_name in ("origin", "referer"):
+        header_val = (request.headers.get(header_name) or "").strip()
+        if not header_val:
+            continue
+        parsed = urlparse(header_val)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme in ("http", "https") and parsed.netloc and host not in ("localhost", "127.0.0.1"):
+            return f"{parsed.scheme}://{parsed.netloc}/api/send-email"
+
+    return None
+
+
 @app.post("/api/incidencias/exportar-email")
 def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Request):
     destinos = [d.strip() for d in req.destinatarios.replace(';', ',').split(',') if d.strip()]
@@ -10299,7 +10325,34 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
             error_smtp = str(e)
             print(f"SMTP directo no disponible o bloqueado en la nube ({e}). Intentando relay Vercel / fallback HTTP...")
 
-    # Si SMTP directo falla en Render, intentar API HTTPS de Brevo (soporta adjuntos PDF/Excel por puerto 443)
+    # Si SMTP directo falla en Render, intentar relay /api/send-email en Vercel para conservar adjuntos
+    if not enviado_exitoso:
+        relay_url = _detectar_url_vercel_relay(request)
+        if relay_url:
+            try:
+                import base64
+                relay_payload = json.dumps({
+                    "raw_mime_b64": base64.b64encode(msg.as_bytes()).decode("ascii"),
+                    "recipients": all_recipients,
+                    "from_email": sender_email,
+                }).encode("utf-8")
+                relay_req = urllib.request.Request(
+                    relay_url,
+                    data=relay_payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "SIPREF-Backend/1.0",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(relay_req, timeout=15.0) as relay_res:
+                    if 200 <= relay_res.status < 300:
+                        enviado_exitoso = True
+                        print(f"Reporte de incidencias enviado exitosamente vía relay Vercel ({relay_url}).")
+            except Exception as e_relay:
+                print(f"Relay Vercel falló ({e_relay}), intentando API HTTPS Brevo / EmailJS...")
+
+    # Si SMTP directo y relay Vercel fallan, intentar API HTTPS de Brevo (soporta adjuntos PDF/Excel por puerto 443)
     if not enviado_exitoso:
         brevo_api_key = os.getenv("BREVO_API_KEY", "").strip()
         if brevo_api_key:
