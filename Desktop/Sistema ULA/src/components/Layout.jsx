@@ -20,6 +20,12 @@ export default function Layout() {
   const [mostrarNotificaciones, setMostrarNotificaciones] = useState(false);
   const notificacionesRef = useRef(null);
 
+  // Estados para solicitudes de acceso de SIPREF Reservas
+  const [solicitudesAcceso, setSolicitudesAcceso] = useState([]);
+  const [totalSolicitudesAcceso, setTotalSolicitudesAcceso] = useState(0);
+  const [rolesSeleccionados, setRolesSeleccionados] = useState({});
+  const [fotosFallidas, setFotosFallidas] = useState({});
+
   // Estado académico
   const [estadoAcademico, setEstadoAcademico] = useState(null);
 
@@ -243,6 +249,171 @@ export default function Layout() {
     cargarExamenesHoy();
   }, [usuario.id]);
 
+  // 3. Consultar solicitudes de acceso pendientes de SIPREF Reservas al montar y cada 30s
+  const cargarSolicitudesAcceso = async () => {
+    try {
+      const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
+      const res = await fetch(`${API_URL}/api/reservas-acceso/pendientes`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const lista = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.datos)
+        ? data.datos
+        : Array.isArray(data?.solicitudes)
+        ? data.solicitudes
+        : Array.isArray(data?.items)
+        ? data.items
+        : [];
+      setSolicitudesAcceso(lista);
+      const totalApi = typeof data?.total === 'number' ? data.total : lista.length;
+      setTotalSolicitudesAcceso(Math.max(totalApi, lista.length));
+      setRolesSeleccionados((prev) => {
+        const next = { ...prev };
+        lista.forEach((s) => {
+          if (s?.id && !next[s.id]) {
+            next[s.id] = 'DOCENTE';
+          }
+        });
+        return next;
+      });
+    } catch (error) {
+      console.error('Error cargando solicitudes de acceso SIPREF Reservas:', error);
+    }
+  };
+
+  useEffect(() => {
+    cargarSolicitudesAcceso();
+    const interval = setInterval(cargarSolicitudesAcceso, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const formatearFechaIntento = (sol) => {
+    const raw =
+      sol?.ultimoIntentoEn ||
+      sol?.ultimo_intento_en ||
+      sol?.intentadoEn ||
+      sol?.intentado_en ||
+      sol?.created_at ||
+      sol?.fecha;
+    if (!raw) return '';
+    try {
+      const fecha = new Date(raw);
+      if (isNaN(fecha.getTime())) return String(raw);
+      return fecha.toLocaleString('es-MX', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return String(raw);
+    }
+  };
+
+  const manejarAccionSolicitud = async (sol, accion) => {
+    const solId = sol.id;
+    const rolElegido = rolesSeleccionados[solId] || 'DOCENTE';
+
+    // Eliminar de la lista al instante
+    setSolicitudesAcceso((prev) => prev.filter((item) => item.id !== solId));
+    setTotalSolicitudesAcceso((prev) => Math.max(0, prev - 1));
+
+    const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
+    const endpoint =
+      accion === 'aprobar'
+        ? `${API_URL}/api/reservas-acceso/${encodeURIComponent(solId)}/aprobar`
+        : `${API_URL}/api/reservas-acceso/${encodeURIComponent(solId)}/rechazar`;
+
+    const bodyPayload =
+      accion === 'aprobar'
+        ? {
+            rol: rolElegido,
+            admin_id: String(usuario?.id || usuario?.correo || 'admin'),
+            admin_nombre: usuario?.nombre || 'Administrador',
+          }
+        : {
+            admin_id: String(usuario?.id || usuario?.correo || 'admin'),
+            admin_nombre: usuario?.nombre || 'Administrador',
+          };
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-usuario': encodeURIComponent(usuario?.nombre || 'Administrador'),
+        },
+        body: JSON.stringify(bodyPayload),
+      });
+
+      if (res.status === 409) {
+        await cargarSolicitudesAcceso();
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'info',
+          title: 'Esta solicitud ya fue atendida por otro administrador.',
+          showConfirmButton: false,
+          timer: 4000,
+          timerProgressBar: true,
+        });
+        return;
+      }
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        await cargarSolicitudesAcceso();
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: errData?.detail || 'No se pudo procesar la solicitud de acceso.',
+          showConfirmButton: false,
+          timer: 4000,
+          timerProgressBar: true,
+        });
+        return;
+      }
+
+      const etiquetaRol =
+        rolElegido === 'ADMIN_ESPACIOS'
+          ? 'Admin. de espacios'
+          : rolElegido === 'PERSONAL'
+          ? 'Personal'
+          : 'Docente';
+
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title:
+          accion === 'aprobar'
+            ? `Acceso permitido a ${sol.nombre || sol.correo} (${etiquetaRol})`
+            : `Solicitud de ${sol.nombre || sol.correo} rechazada`,
+        showConfirmButton: false,
+        timer: 3500,
+        timerProgressBar: true,
+      });
+    } catch (error) {
+      console.error('Error al procesar solicitud de acceso:', error);
+      await cargarSolicitudesAcceso();
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al procesar la solicitud.',
+        showConfirmButton: false,
+        timer: 4000,
+        timerProgressBar: true,
+      });
+    }
+  };
+
+  const totalNotificacionesCampanita =
+    notificaciones.length + Math.max(totalSolicitudesAcceso, solicitudesAcceso.length);
+
   useEffect(() => {
     const handleClickFuera = (event) => {
       if (alertasRef.current && !alertasRef.current.contains(event.target)) {
@@ -462,25 +633,131 @@ export default function Layout() {
             {/* Notificaciones (Icono Campanita) */}
             <div className="relative" ref={notificacionesRef}>
               <button 
-                onClick={() => setMostrarNotificaciones(!mostrarNotificaciones)}
+                onClick={() => {
+                  const nuevoEstado = !mostrarNotificaciones;
+                  setMostrarNotificaciones(nuevoEstado);
+                  if (nuevoEstado) {
+                    cargarSolicitudesAcceso();
+                  }
+                }}
                 className="relative p-1.5 sm:p-2 rounded-[12px] text-[#c5c6cf] hover:text-[#1c355e] hover:bg-slate-100 transition-colors group" 
                 title="Notificaciones">
                 <span className="material-symbols-outlined text-[22px] group-hover:scale-110 transition-transform">notifications</span>
-                {notificaciones.length > 0 && (
-                  <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-red-500 border-2 border-white animate-pulse"></span>
+                {totalNotificacionesCampanita > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center border-2 border-white animate-pulse">
+                    {totalNotificacionesCampanita}
+                  </span>
                 )}
               </button>
 
               {/* Dropdown de Notificaciones */}
               {mostrarNotificaciones && (
-                <div className="absolute top-full right-0 mt-2 w-80 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-50">
+                <div className="absolute top-full right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-50">
                   <div className="bg-[#1c355e] text-white px-4 py-3 flex items-center justify-between">
                     <h3 className="font-bold text-sm">Notificaciones de Hoy</h3>
                     <span className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full font-bold">
-                      {notificaciones.length}
+                      {totalNotificacionesCampanita}
                     </span>
                   </div>
-                  <div className="p-2 max-h-80 overflow-y-auto">
+                  <div className="p-2 max-h-96 overflow-y-auto">
+                    {/* Solicitudes de acceso pendientes · SIPREF Reservas */}
+                    {solicitudesAcceso.map((sol) => {
+                      const fotoUrl = sol.fotoUrl || sol.foto_url || sol.foto || sol.picture || null;
+                      const mostrarFoto = fotoUrl && !fotosFallidas[sol.id];
+                      const inicial = (sol.nombre || sol.correo || 'U').trim().charAt(0).toUpperCase();
+                      const fechaIntento = formatearFechaIntento(sol);
+                      const rolActual = rolesSeleccionados[sol.id] || 'DOCENTE';
+
+                      return (
+                        <div
+                          key={`sol-acceso-${sol.id}`}
+                          className="p-3 mb-2 rounded-xl border border-amber-200/80 bg-amber-50/40 transition-colors"
+                        >
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <span className="material-symbols-outlined text-[15px] text-[#1c355e]">vpn_key</span>
+                            <p className="text-[11px] font-extrabold uppercase tracking-wider text-[#1c355e]">
+                              Solicitud de acceso · SIPREF Reservas
+                            </p>
+                          </div>
+
+                          <div className="flex items-start gap-3">
+                            {mostrarFoto ? (
+                              <img
+                                src={fotoUrl}
+                                alt={sol.nombre || 'Usuario'}
+                                referrerPolicy="no-referrer"
+                                onError={() =>
+                                  setFotosFallidas((prev) => ({ ...prev, [sol.id]: true }))
+                                }
+                                className="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-slate-200 shadow-sm"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-full bg-[#1c355e] text-white font-bold text-sm flex items-center justify-center flex-shrink-0 shadow-sm">
+                                {inicial}
+                              </div>
+                            )}
+
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-slate-800 truncate">
+                                {sol.nombre || 'Usuario sin nombre'}
+                              </p>
+                              <p className="text-xs text-slate-600 truncate">{sol.correo}</p>
+                              {fechaIntento && (
+                                <p className="text-[11px] text-slate-400 mt-0.5">
+                                  Intento: {fechaIntento}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-2.5 flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                              <label
+                                htmlFor={`rol-select-${sol.id}`}
+                                className="text-[11px] font-semibold text-slate-600 shrink-0"
+                              >
+                                Rol:
+                              </label>
+                              <select
+                                id={`rol-select-${sol.id}`}
+                                value={rolActual}
+                                onChange={(e) =>
+                                  setRolesSeleccionados((prev) => ({
+                                    ...prev,
+                                    [sol.id]: e.target.value,
+                                  }))
+                                }
+                                className="flex-1 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#1c355e]/20 focus:border-[#1c355e]"
+                              >
+                                <option value="DOCENTE">Docente</option>
+                                <option value="PERSONAL">Personal</option>
+                                <option value="ADMIN_ESPACIOS">Admin. de espacios</option>
+                              </select>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => manejarAccionSolicitud(sol, 'aprobar')}
+                                className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-sm flex items-center justify-center gap-1"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">check_circle</span>
+                                Permitir
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => manejarAccionSolicitud(sol, 'rechazar')}
+                                className="flex-1 py-1.5 px-3 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs transition-colors flex items-center justify-center gap-1"
+                              >
+                                <span className="material-symbols-outlined text-[15px]">cancel</span>
+                                Rechazar
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
                     {notificaciones.map((noti) => {
                       const iconName = noti.tipo === 'evento' ? 'event_available' : noti.tipo === 'recordatorio' ? 'campaign' : 'school';
                       const badgeClass = noti.tipo === 'evento' ? 'bg-purple-100 text-purple-700' : noti.tipo === 'recordatorio' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-600';
@@ -512,7 +789,7 @@ export default function Layout() {
                       }
                       return <div key={noti.id}>{ItemContent}</div>;
                     })}
-                    {notificaciones.length === 0 && (
+                    {notificaciones.length === 0 && solicitudesAcceso.length === 0 && (
                       <div className="text-center py-6 text-slate-500 text-sm">
                         <span className="material-symbols-outlined text-3xl mb-2 opacity-50 block">notifications_paused</span>
                         No hay notificaciones para hoy.

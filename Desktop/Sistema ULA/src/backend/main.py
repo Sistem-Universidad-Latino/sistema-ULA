@@ -10489,3 +10489,258 @@ def exportar_incidencias_csv(
         headers={'Content-Disposition': f'attachment; filename="{nombre_archivo}"'}
     )
 
+
+# ---------------------------------------------------------
+# INTEGRACIÓN SERVIDOR-A-SERVIDOR CON SIPREF RESERVAS (HMAC-SHA256)
+# ---------------------------------------------------------
+import hmac
+import hashlib
+import time as _unix_time
+
+ROLES_RESERVAS_VALIDOS = {"DOCENTE", "PERSONAL", "ADMIN_ESPACIOS"}
+
+
+class AprobarSolicitudReservasRequest(BaseModel):
+    rol: str
+    admin_id: Union[str, int]
+    admin_nombre: str
+    motivo: Optional[str] = None
+
+
+class RechazarSolicitudReservasRequest(BaseModel):
+    admin_id: Union[str, int]
+    admin_nombre: str
+    motivo: Optional[str] = None
+
+
+def _firmar_peticion_sipref_reservas(metodo: str, ruta_con_query: str, body_json_o_vacio: str = "") -> Dict[str, str]:
+    """
+    Genera los encabezados de autenticación HMAC-SHA256 hacia SIPREF Reservas:
+    - X-SIPREF-Key-Id: <SIPREF_RESERVAS_KEY_ID>
+    - X-SIPREF-Timestamp: <segundos Unix actuales>
+    - X-SIPREF-Signature: hmac_sha256_hex(SIPREF_RESERVAS_SECRET, f"{ts}.{METODO}.{'/api/integracion/v1' + ruta_con_query}.{sha256_hex(body_json_o_vacio)}")
+    """
+    key_id = os.getenv("SIPREF_RESERVAS_KEY_ID", "sipref-principal-local").strip()
+    secret = os.getenv("SIPREF_RESERVAS_SECRET", "reemplazar_por_secreto_hmac_integracion_local_32_chars").strip()
+    ts = str(int(_unix_time.time()))
+    metodo_upper = metodo.upper()
+    if not ruta_con_query.startswith("/"):
+        ruta_con_query = "/" + ruta_con_query
+
+    body_bytes = (body_json_o_vacio or "").encode("utf-8")
+    body_sha256 = hashlib.sha256(body_bytes).hexdigest()
+    canonical_str = f"{ts}.{metodo_upper}.{'/api/integracion/v1' + ruta_con_query}.{body_sha256}"
+    signature = hmac.new(secret.encode("utf-8"), canonical_str.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    return {
+        "X-SIPREF-Key-Id": key_id,
+        "X-SIPREF-Timestamp": ts,
+        "X-SIPREF-Signature": signature,
+    }
+
+
+def _llamar_sipref_reservas(metodo: str, ruta_con_query: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Realiza una petición HTTP firmada con HMAC-SHA256 hacia SIPREF Reservas."""
+    base_url = os.getenv("SIPREF_RESERVAS_API_URL", "http://localhost:4000/api/integracion/v1").strip().rstrip("/")
+    if not ruta_con_query.startswith("/"):
+        ruta_con_query = "/" + ruta_con_query
+
+    body_str = json.dumps(payload, separators=(",", ":"), ensure_ascii=False) if payload is not None else ""
+    body_bytes = body_str.encode("utf-8") if payload is not None else None
+
+    headers = _firmar_peticion_sipref_reservas(metodo, ruta_con_query, body_str)
+    headers["Accept"] = "application/json"
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(
+        f"{base_url}{ruta_con_query}",
+        data=body_bytes,
+        headers=headers,
+        method=metodo.upper(),
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10.0) as res:
+            raw = res.read().decode("utf-8", errors="replace")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        err_raw = e.read().decode("utf-8", errors="replace")
+        try:
+            err_json = json.loads(err_raw)
+            if isinstance(err_json, dict) and isinstance(err_json.get("error"), dict):
+                detail_msg = err_json["error"].get("mensaje") or err_json["error"].get("codigo") or err_json
+            elif isinstance(err_json, dict):
+                detail_msg = err_json.get("detail") or err_json.get("mensaje") or err_json.get("message") or err_json
+            else:
+                detail_msg = err_json
+        except Exception:
+            detail_msg = err_raw or f"Error HTTP {e.code} desde SIPREF Reservas"
+        raise HTTPException(status_code=e.code, detail=detail_msg)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo conectar con SIPREF Reservas: {str(e)}")
+
+
+@app.get("/api/reservas-acceso/pendientes")
+def obtener_solicitudes_acceso_pendientes():
+    """Consulta las solicitudes de acceso en estado PENDIENTE desde SIPREF Reservas."""
+    return _llamar_sipref_reservas("GET", "/solicitudes?estado=PENDIENTE&tamano=20")
+
+
+@app.post("/api/reservas-acceso/{solicitud_id}/aprobar")
+def aprobar_solicitud_acceso_reservas(
+    solicitud_id: str,
+    req: AprobarSolicitudReservasRequest,
+    request: Request,
+):
+    """Aprueba una solicitud de acceso en SIPREF Reservas y registra la acción en bitacora_cambios."""
+    rol_limpio = (req.rol or "").strip().upper()
+    if rol_limpio not in ROLES_RESERVAS_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rol inválido '{req.rol}'. Roles válidos: {', '.join(sorted(ROLES_RESERVAS_VALIDOS))}",
+        )
+
+    admin_id_str = str(req.admin_id).strip() if req.admin_id is not None and str(req.admin_id).strip() != "" else "admin"
+    admin_nombre_str = (req.admin_nombre or obtener_usuario(request) or "Administrador").strip()
+
+    payload_reservas: Dict[str, Any] = {
+        "rol": rol_limpio,
+        "admin": {
+            "id": admin_id_str,
+            "nombre": admin_nombre_str,
+        },
+    }
+    if req.motivo is not None and str(req.motivo).strip() != "":
+        payload_reservas["motivo"] = str(req.motivo).strip()
+
+    respuesta = _llamar_sipref_reservas("POST", f"/solicitudes/{solicitud_id}/aprobar", payload_reservas)
+
+    # Registrar en bitacora_cambios de SIPREF
+    try:
+        sol_info = respuesta.get("solicitud") or respuesta.get("datos") or respuesta if isinstance(respuesta, dict) else {}
+        solicitante_nombre = (
+            sol_info.get("nombre")
+            if isinstance(sol_info, dict) and sol_info.get("nombre")
+            else None
+        )
+        solicitante_correo = (
+            sol_info.get("correo")
+            if isinstance(sol_info, dict) and sol_info.get("correo")
+            else None
+        )
+        docente_ref = (
+            f"{solicitante_nombre} ({solicitante_correo})"
+            if solicitante_nombre and solicitante_correo
+            else (solicitante_nombre or solicitante_correo)
+        )
+        motivo_bitacora = f"Solicitud de acceso SIPREF Reservas ({solicitud_id}) aprobada con rol {rol_limpio}"
+        if req.motivo and str(req.motivo).strip():
+            motivo_bitacora += f" — Motivo: {str(req.motivo).strip()}"
+
+        connection = get_db_connection()
+        try:
+            with connection.cursor() as cursor:
+                registrar_bitacora(
+                    cursor=cursor,
+                    usuario=admin_nombre_str,
+                    tipo_operacion="aprobar_solicitud_reservas",
+                    modulo_afectado="reservas_acceso",
+                    registro_id=None,
+                    docente=docente_ref,
+                    estado_anterior="PENDIENTE",
+                    estado_nuevo=f"APROBADA ({rol_limpio})",
+                    motivo=motivo_bitacora,
+                    datos_anteriores={"solicitud_id": solicitud_id, "estado": "PENDIENTE"},
+                    datos_nuevos={
+                        "solicitud_id": solicitud_id,
+                        "estado": "APROBADA",
+                        "rol": rol_limpio,
+                        "admin": {"id": admin_id_str, "nombre": admin_nombre_str},
+                        "motivo": req.motivo,
+                        "respuesta": respuesta,
+                    },
+                )
+            connection.commit()
+        finally:
+            connection.close()
+    except Exception as e:
+        print(f"Advertencia: no se pudo registrar en bitacora_cambios la aprobación de {solicitud_id}: {e}")
+
+    return respuesta
+
+
+@app.post("/api/reservas-acceso/{solicitud_id}/rechazar")
+def rechazar_solicitud_acceso_reservas(
+    solicitud_id: str,
+    req: RechazarSolicitudReservasRequest,
+    request: Request,
+):
+    """Rechaza una solicitud de acceso en SIPREF Reservas y registra la acción en bitacora_cambios."""
+    admin_id_str = str(req.admin_id).strip() if req.admin_id is not None and str(req.admin_id).strip() != "" else "admin"
+    admin_nombre_str = (req.admin_nombre or obtener_usuario(request) or "Administrador").strip()
+
+    payload_reservas: Dict[str, Any] = {
+        "admin": {
+            "id": admin_id_str,
+            "nombre": admin_nombre_str,
+        },
+    }
+    if req.motivo is not None and str(req.motivo).strip() != "":
+        payload_reservas["motivo"] = str(req.motivo).strip()
+
+    respuesta = _llamar_sipref_reservas("POST", f"/solicitudes/{solicitud_id}/rechazar", payload_reservas)
+
+    # Registrar en bitacora_cambios de SIPREF
+    try:
+        sol_info = respuesta.get("solicitud") or respuesta.get("datos") or respuesta if isinstance(respuesta, dict) else {}
+        solicitante_nombre = (
+            sol_info.get("nombre")
+            if isinstance(sol_info, dict) and sol_info.get("nombre")
+            else None
+        )
+        solicitante_correo = (
+            sol_info.get("correo")
+            if isinstance(sol_info, dict) and sol_info.get("correo")
+            else None
+        )
+        docente_ref = (
+            f"{solicitante_nombre} ({solicitante_correo})"
+            if solicitante_nombre and solicitante_correo
+            else (solicitante_nombre or solicitante_correo)
+        )
+        motivo_bitacora = f"Solicitud de acceso SIPREF Reservas ({solicitud_id}) rechazada"
+        if req.motivo and str(req.motivo).strip():
+            motivo_bitacora += f" — Motivo: {str(req.motivo).strip()}"
+
+        connection = get_db_connection()
+        try:
+            with connection.cursor() as cursor:
+                registrar_bitacora(
+                    cursor=cursor,
+                    usuario=admin_nombre_str,
+                    tipo_operacion="rechazar_solicitud_reservas",
+                    modulo_afectado="reservas_acceso",
+                    registro_id=None,
+                    docente=docente_ref,
+                    estado_anterior="PENDIENTE",
+                    estado_nuevo="RECHAZADA",
+                    motivo=motivo_bitacora,
+                    datos_anteriores={"solicitud_id": solicitud_id, "estado": "PENDIENTE"},
+                    datos_nuevos={
+                        "solicitud_id": solicitud_id,
+                        "estado": "RECHAZADA",
+                        "admin": {"id": admin_id_str, "nombre": admin_nombre_str},
+                        "motivo": req.motivo,
+                        "respuesta": respuesta,
+                    },
+                )
+            connection.commit()
+        finally:
+            connection.close()
+    except Exception as e:
+        print(f"Advertencia: no se pudo registrar en bitacora_cambios el rechazo de {solicitud_id}: {e}")
+
+    return respuesta
+
+
