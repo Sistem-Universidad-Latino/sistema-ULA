@@ -90,6 +90,36 @@ export default function AgendarEventoModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
+  const restablecerCamposEnBlanco = () => {
+    const refDate = ahora instanceof Date ? ahora : new Date();
+    const anio = refDate.getFullYear();
+    const mes = String(refDate.getMonth() + 1).padStart(2, '0');
+    const dia = String(refDate.getDate()).padStart(2, '0');
+    const hoyISO = `${anio}-${mes}-${dia}`;
+    const lista = aulasList.length > 0 ? aulasList : aulasInternas;
+    setFormData({
+      tipo_evento: '',
+      nombre_evento: '',
+      aula_nombre: lista.length > 0 ? lista[0].nombre : '',
+      fecha: hoyISO,
+      hora_inicio: '10:00',
+      hora_fin: '12:00',
+      responsable: '',
+      correo: '',
+      descripcion: ''
+    });
+    setRecordatorios([
+      { tipo: 'sipref', antencion_valor: 30, antencion_unidad: 'minutos' },
+      { tipo: 'correo', antencion_valor: 1, antencion_unidad: 'horas' }
+    ]);
+    setRecursosSeleccionados({});
+    setMostrarNuevoMaterial(false);
+    setNuevoMaterialNombre('');
+    setNuevoMaterialRequiereCantidad(true);
+    setPlantillaSeleccionadaId('');
+    setErrorDisponibilidad('');
+  };
+
   // Reset form ONLY when the modal opens or when editing a different event
   useEffect(() => {
     if (!isOpen) return;
@@ -122,42 +152,33 @@ export default function AgendarEventoModal({
       } else {
         setRecursosSeleccionados({});
       }
+      setMostrarNuevoMaterial(false);
+      setNuevoMaterialNombre('');
+      setNuevoMaterialRequiereCantidad(true);
+      setPlantillaSeleccionadaId('');
+      setErrorDisponibilidad('');
     } else {
-      const refDate = ahora instanceof Date ? ahora : new Date();
-      const anio = refDate.getFullYear();
-      const mes = String(refDate.getMonth() + 1).padStart(2, '0');
-      const dia = String(refDate.getDate()).padStart(2, '0');
-      const hoyISO = `${anio}-${mes}-${dia}`;
-      const lista = aulasList.length > 0 ? aulasList : aulasInternas;
-      setFormData({
-        tipo_evento: '',
-        nombre_evento: '',
-        aula_nombre: lista.length > 0 ? lista[0].nombre : '',
-        fecha: hoyISO,
-        hora_inicio: '10:00',
-        hora_fin: '12:00',
-        responsable: '',
-        correo: '',
-        descripcion: ''
-      });
-      setRecordatorios([
-        { tipo: 'sipref', antencion_valor: 30, antencion_unidad: 'minutos' },
-        { tipo: 'correo', antencion_valor: 1, antencion_unidad: 'horas' }
-      ]);
-      setRecursosSeleccionados({});
+      restablecerCamposEnBlanco();
     }
-    setMostrarNuevoMaterial(false);
-    setNuevoMaterialNombre('');
-    setNuevoMaterialRequiereCantidad(true);
     setMaterialesDesplegados(Boolean(eventoAEditar?.recursos?.length));
-    setPlantillaSeleccionadaId('');
     setMostrarModalPlantilla(false);
     setPlantillaEnEdicion(null);
-    setErrorDisponibilidad('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, eventoAEditar?.id]);
 
   if (!isOpen) return null;
+
+  const handleLimpiarTodo = () => {
+    restablecerCamposEnBlanco();
+    Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'info',
+      title: 'Formulario limpiado',
+      showConfirmButton: false,
+      timer: 2000
+    });
+  };
 
   const handleAgregarRecordatorio = () => {
     setRecordatorios([
@@ -1199,30 +1220,42 @@ export default function AgendarEventoModal({
           </div>
 
           {/* BOTONES ACCIÓN */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-100">
             <button
               type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50 transition-all cursor-pointer"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
+              onClick={handleLimpiarTodo}
               disabled={guardando || verificando}
-              className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#1c355e] to-[#244275] text-white font-bold text-sm hover:brightness-110 transition-all flex items-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+              className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Limpiar todo lo seleccionado y escrito"
             >
-              {guardando ? (
-                <>
-                  <span className="material-symbols-outlined animate-spin text-lg">sync</span> Guardando...
-                </>
-              ) : (
-                <>
-                  <span className="material-symbols-outlined text-lg">check_circle</span>
-                  {eventoAEditar ? 'Guardar Cambios' : 'Agendar Evento'}
-                </>
-              )}
+              <span className="material-symbols-outlined text-lg">cleaning_services</span>
+              Limpiar todo
             </button>
+            <div className="flex items-center gap-3 ml-auto">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-sm hover:bg-slate-50 transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={guardando || verificando}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#1c355e] to-[#244275] text-white font-bold text-sm hover:brightness-110 transition-all flex items-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {guardando ? (
+                  <>
+                    <span className="material-symbols-outlined animate-spin text-lg">sync</span> Guardando...
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-lg">check_circle</span>
+                    {eventoAEditar ? 'Guardar Cambios' : 'Agendar Evento'}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
         </form>
