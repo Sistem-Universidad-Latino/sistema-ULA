@@ -11230,7 +11230,7 @@ def aprobar_solicitud_reservas_bd(
             cursor.execute("""
                 UPDATE reservas_usuarios
                 SET rol = %s,
-                    estado = 'ACTIVO',
+                    estado = 'APROBADA',
                     actualizado_en = NOW()
                 WHERE google_sub = %s OR correo = %s
             """, (rol_limpio, sol["google_sub"], sol["correo"]))
@@ -11360,9 +11360,9 @@ def listar_usuarios_reservas_bd():
                     ultimo_acceso_en
                 FROM reservas_usuarios
                 ORDER BY
-                    CASE estado
-                        WHEN 'ACTIVO' THEN 1
-                        WHEN 'PENDIENTE' THEN 2
+                    CASE
+                        WHEN UPPER(estado) IN ('ACTIVO', 'ACTIVA', 'APROBADA', 'APROBADO') THEN 1
+                        WHEN UPPER(estado) IN ('PENDIENTE', 'PENDIENTE_APROBACION') THEN 2
                         ELSE 3
                     END,
                     ultimo_acceso_en DESC,

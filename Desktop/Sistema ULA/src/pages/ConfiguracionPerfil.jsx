@@ -4,6 +4,9 @@ import { useToast, ToastContainer } from '../components/useToast';
 import { useUser } from '../components/UserContext';
 
 const TURNO_LABEL = { matutino: 'Matutino', vespertino: 'Vespertino', ambos: 'Ambos Turnos' };
+const ESTADOS_RESERVAS_ACTIVOS = new Set(['ACTIVO', 'ACTIVA', 'APROBADA', 'APROBADO']);
+const ESTADOS_RESERVAS_PENDIENTES = new Set(['PENDIENTE', 'PENDIENTE_APROBACION']);
+const esEstadoReservasActivo = (estado) => ESTADOS_RESERVAS_ACTIVOS.has(String(estado || '').toUpperCase());
 
 const fmtFecha = (iso) => {
   if (!iso) return '—';
@@ -517,8 +520,8 @@ export default function ConfiguracionPerfil() {
               ) : (
                 usuariosReservas.map((ur) => {
                   const estadoUpper = String(ur.estado || 'PENDIENTE').toUpperCase();
-                  const esActivo = estadoUpper === 'ACTIVO';
-                  const esPendiente = estadoUpper === 'PENDIENTE' || estadoUpper === 'PENDIENTE_APROBACION';
+                  const esActivo = esEstadoReservasActivo(estadoUpper);
+                  const esPendiente = ESTADOS_RESERVAS_PENDIENTES.has(estadoUpper);
                   const mostrarFoto = ur.foto_url && !fotosReservasFallidas[ur.id];
                   const inicial = (ur.nombre || ur.correo || 'U').trim().charAt(0).toUpperCase();
                   const badgeClase = esActivo
@@ -527,7 +530,13 @@ export default function ConfiguracionPerfil() {
                     ? 'bg-amber-50 text-amber-700 border border-amber-200'
                     : 'bg-red-50 text-red-600 border border-red-200';
                   const dotClase = esActivo ? 'bg-green-500' : esPendiente ? 'bg-amber-500' : 'bg-red-500';
-                  const etiquetaEstado = esActivo ? 'Activo' : esPendiente ? 'Pendiente' : 'Suspendido';
+                  const etiquetaEstado = esActivo
+                    ? 'Activo'
+                    : esPendiente
+                    ? 'Pendiente'
+                    : estadoUpper === 'RECHAZADA' || estadoUpper === 'RECHAZADO'
+                    ? 'Rechazado'
+                    : 'Suspendido';
 
                   return (
                     <div key={ur.id} className="px-5 py-3 flex items-center gap-3 transition-colors hover:bg-[#faf9fc]">
@@ -585,7 +594,7 @@ export default function ConfiguracionPerfil() {
                 {usuariosReservas.length} usuario{usuariosReservas.length !== 1 ? 's' : ''} en Reservas
               </p>
               {(() => {
-                const activos = usuariosReservas.filter((u) => String(u.estado || '').toUpperCase() === 'ACTIVO').length;
+                const activos = usuariosReservas.filter((u) => esEstadoReservasActivo(u.estado)).length;
                 return (
                   <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-lg">
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
