@@ -98,6 +98,16 @@ export default function AgendaEventos({ aulasList = [] }) {
   const [filtroAula, setFiltroAula] = useState('todas');
   const [filtroFecha, setFiltroFecha] = useState('');
 
+  // Vista (tarjetas | calendario) y estado del calendario mensual
+  const [vistaAgenda, setVistaAgenda] = useState('calendario');
+  const [mesCalendario, setMesCalendario] = useState(() => new Date(ahora.getFullYear(), ahora.getMonth(), 1));
+  const [diaSeleccionado, setDiaSeleccionado] = useState(() => {
+    const y = ahora.getFullYear();
+    const m = String(ahora.getMonth() + 1).padStart(2, '0');
+    const d = String(ahora.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  });
+
   // Modales
   const [modalNuevo, setModalNuevo] = useState(false);
   const [eventoAEditar, setEventoAEditar] = useState(null);
@@ -484,6 +494,34 @@ export default function AgendaEventos({ aulasList = [] }) {
         </div>
 
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto shrink-0">
+          {/* Selector de Vista: Calendario / Tarjetas */}
+          <div className="inline-flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200/80 w-full sm:w-auto justify-center">
+            <button
+              type="button"
+              onClick={() => setVistaAgenda('calendario')}
+              className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                vistaAgenda === 'calendario'
+                  ? 'bg-[#1c355e] text-white shadow-sm'
+                  : 'text-slate-600 hover:text-[#1c355e]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px]">calendar_month</span>
+              Calendario
+            </button>
+            <button
+              type="button"
+              onClick={() => setVistaAgenda('tarjetas')}
+              className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                vistaAgenda === 'tarjetas'
+                  ? 'bg-[#1c355e] text-white shadow-sm'
+                  : 'text-slate-600 hover:text-[#1c355e]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[16px]">grid_view</span>
+              Tarjetas
+            </button>
+          </div>
+
           <button
             onClick={handleExportarHistorial}
             className="w-full sm:w-auto px-4 py-3 bg-white border border-[#c5c6cf]/50 text-[#1c355e] hover:bg-slate-50 hover:border-[#1c355e]/30 rounded-2xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer"
@@ -577,7 +615,15 @@ export default function AgendaEventos({ aulasList = [] }) {
             <input
               type="date"
               value={filtroFecha}
-              onChange={(e) => setFiltroFecha(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setFiltroFecha(val);
+                if (val) {
+                  const [yy, mm] = val.split('-').map(Number);
+                  if (yy && mm) setMesCalendario(new Date(yy, mm - 1, 1));
+                  setDiaSeleccionado(val);
+                }
+              }}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white"
             />
           </div>
@@ -585,12 +631,285 @@ export default function AgendaEventos({ aulasList = [] }) {
         </div>
       </div>
 
-      {/* LISTA / TARJETAS DE EVENTOS */}
+      {/* VISTA CALENDARIO MENSUAL O TARJETAS DE EVENTOS */}
       {cargando ? (
         <div className="flex justify-center py-16">
           <span className="material-symbols-outlined animate-spin text-4xl text-[#1c355e]">sync</span>
         </div>
-      ) : eventos.filter(ev => {
+      ) : vistaAgenda === 'calendario' ? (() => {
+        const eventosFiltrados = eventos.filter(ev => {
+          const est = obtenerEstadoEvento(ev, ahora);
+          if (filtroEstado !== 'todos' && est.toLowerCase() !== filtroEstado.toLowerCase()) return false;
+          return true;
+        });
+
+        // Agrupar eventos por fecha YYYY-MM-DD
+        const eventosPorFecha = {};
+        for (const ev of eventosFiltrados) {
+          const f = String(ev.fecha || '').slice(0, 10);
+          if (!f) continue;
+          if (!eventosPorFecha[f]) eventosPorFecha[f] = [];
+          eventosPorFecha[f].push(ev);
+        }
+
+        const anio = mesCalendario.getFullYear();
+        const mes = mesCalendario.getMonth();
+        const primerDiaMes = new Date(anio, mes, 1);
+        const ultimoDiaMes = new Date(anio, mes + 1, 0);
+        // Lunes = 0 ... Domingo = 6
+        const offsetInicio = (primerDiaMes.getDay() + 6) % 7;
+        const totalDiasMes = ultimoDiaMes.getDate();
+
+        const celdas = [];
+        for (let i = 0; i < offsetInicio; i++) {
+          celdas.push(null);
+        }
+        for (let d = 1; d <= totalDiasMes; d++) {
+          const fStr = `${anio}-${String(mes + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+          celdas.push({ dia: d, fechaStr: fStr });
+        }
+        while (celdas.length % 7 !== 0) {
+          celdas.push(null);
+        }
+
+        const hoyStr = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
+        const nombreMes = mesCalendario.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+        const eventosDelDia = eventosPorFecha[diaSeleccionado] || [];
+
+        const getPillClasses = (estadoEst) => {
+          switch (estadoEst) {
+            case 'En curso':
+              return 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100';
+            case 'Finalizado':
+              return 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200/80';
+            case 'Cancelado':
+              return 'bg-red-50 text-red-600 border-red-200 line-through hover:bg-red-100';
+            default:
+              return 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100';
+          }
+        };
+
+        return (
+          <div className="space-y-6">
+            <div className="bg-white rounded-3xl border border-[#c5c6cf]/30 shadow-xs overflow-hidden">
+              {/* Cabecera del Calendario */}
+              <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-[#faf9fc] to-white">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMesCalendario(new Date(anio, mes - 1, 1))}
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-[#1c355e] flex items-center justify-center transition-colors cursor-pointer"
+                    title="Mes anterior"
+                  >
+                    <span className="material-symbols-outlined text-lg">chevron_left</span>
+                  </button>
+                  <h3 className="text-base sm:text-lg font-black text-[#1c355e] capitalize min-w-[170px] text-center">
+                    {nombreMes}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setMesCalendario(new Date(anio, mes + 1, 1))}
+                    className="w-9 h-9 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-[#1c355e] flex items-center justify-center transition-colors cursor-pointer"
+                    title="Mes siguiente"
+                  >
+                    <span className="material-symbols-outlined text-lg">chevron_right</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMesCalendario(new Date(ahora.getFullYear(), ahora.getMonth(), 1));
+                      setDiaSeleccionado(hoyStr);
+                    }}
+                    className="ml-1 px-3 py-1.5 rounded-xl bg-[#1c355e]/10 hover:bg-[#1c355e]/20 text-[#1c355e] text-xs font-extrabold transition-colors cursor-pointer"
+                  >
+                    Hoy
+                  </button>
+                </div>
+
+                {/* Leyenda de estados */}
+                <div className="flex flex-wrap items-center gap-3 text-[11px] font-bold text-slate-600">
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>Programado</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>En curso</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span>Finalizado</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>Cancelado</span>
+                </div>
+              </div>
+
+              {/* Días de la semana */}
+              <div className="grid grid-cols-7 border-b border-slate-100 bg-slate-50/70">
+                {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((d) => (
+                  <div key={d} className="py-2.5 text-center text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                    {d}
+                  </div>
+                ))}
+              </div>
+
+              {/* Cuadrícula del mes */}
+              <div className="grid grid-cols-7 divide-x divide-y divide-slate-100">
+                {celdas.map((celda, idx) => {
+                  if (!celda) {
+                    return <div key={`empty-${idx}`} className="min-h-[92px] sm:min-h-[112px] bg-slate-50/40" />;
+                  }
+
+                  const listaDia = eventosPorFecha[celda.fechaStr] || [];
+                  const esHoy = celda.fechaStr === hoyStr;
+                  const esSeleccionado = celda.fechaStr === diaSeleccionado;
+
+                  return (
+                    <div
+                      key={celda.fechaStr}
+                      onClick={() => setDiaSeleccionado(celda.fechaStr)}
+                      className={`min-h-[92px] sm:min-h-[112px] p-1.5 sm:p-2 transition-colors cursor-pointer flex flex-col ${
+                        esSeleccionado
+                          ? 'bg-[#1c355e]/[0.04] ring-2 ring-inset ring-[#1c355e]/30'
+                          : 'bg-white hover:bg-slate-50/80'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span
+                          className={`w-6 h-6 rounded-full text-xs font-extrabold flex items-center justify-center ${
+                            esHoy
+                              ? 'bg-[#1c355e] text-white shadow-xs'
+                              : esSeleccionado
+                              ? 'bg-[#fdbb11] text-[#0e2045]'
+                              : 'text-slate-700'
+                          }`}
+                        >
+                          {celda.dia}
+                        </span>
+                        {listaDia.length > 0 && (
+                          <span className="text-[10px] font-extrabold text-slate-400">
+                            {listaDia.length}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 flex-1 overflow-hidden">
+                        {listaDia.slice(0, 3).map((ev) => {
+                          const est = obtenerEstadoEvento(ev, ahora);
+                          return (
+                            <button
+                              key={ev.id}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDiaSeleccionado(celda.fechaStr);
+                                handleVerDetalle(ev);
+                              }}
+                              title={`${String(ev.hora_inicio).slice(0, 5)} - ${ev.nombre_evento} (Aula ${ev.aula_nombre})`}
+                              className={`w-full text-left px-1.5 py-0.5 rounded-md border text-[10px] font-bold truncate transition-colors cursor-pointer ${getPillClasses(est)}`}
+                            >
+                              {String(ev.hora_inicio).slice(0, 5)} · {ev.nombre_evento}
+                            </button>
+                          );
+                        })}
+                        {listaDia.length > 3 && (
+                          <p className="text-[10px] font-extrabold text-[#1c355e] pl-1">
+                            +{listaDia.length - 3} más
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Detalle de eventos del día seleccionado */}
+            <div className="bg-white rounded-3xl border border-[#c5c6cf]/30 p-5 sm:p-6 shadow-xs space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-[#1c355e]/10 text-[#1c355e] flex items-center justify-center">
+                    <span className="material-symbols-outlined text-xl">today</span>
+                  </div>
+                  <div>
+                    <h4 className="text-sm sm:text-base font-black text-[#1c355e]">
+                      Eventos del {diaSeleccionado}
+                    </h4>
+                    <p className="text-xs text-slate-500 font-medium">
+                      {eventosDelDia.length} evento{eventosDelDia.length !== 1 ? 's' : ''} registrado{eventosDelDia.length !== 1 ? 's' : ''} en esta fecha
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEventoAEditar(null);
+                    setModalNuevo(true);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-[#fdbb11]/20 hover:bg-[#fdbb11]/30 text-[#0e2045] text-xs font-black flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-base">add_circle</span>
+                  Agendar evento
+                </button>
+              </div>
+
+              {eventosDelDia.length === 0 ? (
+                <div className="py-8 text-center text-slate-400">
+                  <span className="material-symbols-outlined text-3xl mb-1 text-slate-300 block">event_available</span>
+                  <p className="text-xs font-semibold text-slate-500">No hay eventos registrados para este día.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {eventosDelDia.map((ev) => {
+                    const estadoEfectivo = obtenerEstadoEvento(ev, ahora);
+                    const badge = getBadgeEstado(estadoEfectivo);
+                    return (
+                      <div
+                        key={`cal-det-${ev.id}`}
+                        className={`rounded-2xl p-4 border transition-all flex flex-col justify-between space-y-3 ${
+                          estadoEfectivo === 'Cancelado'
+                            ? 'border-red-200 bg-red-50/20 opacity-85'
+                            : estadoEfectivo === 'En curso'
+                            ? 'border-emerald-400 bg-emerald-50/10'
+                            : 'border-slate-200 bg-slate-50/40 hover:bg-white hover:shadow-sm'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <span className="px-2.5 py-0.5 bg-slate-100 text-slate-700 font-bold text-[10px] rounded-full uppercase">
+                              {ev.tipo_evento}
+                            </span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border flex items-center gap-1 ${badge.cls}`}>
+                              <span className="material-symbols-outlined text-xs">{badge.icon}</span>
+                              {badge.label}
+                            </span>
+                          </div>
+                          <h5 className="text-sm font-bold text-[#1c355e] line-clamp-2">{ev.nombre_evento}</h5>
+                          <div className="mt-2 space-y-1 text-xs text-slate-600 font-medium">
+                            <p className="font-bold text-indigo-900">Aula {ev.aula_nombre}</p>
+                            <p>Horario: <strong>{String(ev.hora_inicio).slice(0, 5)} - {String(ev.hora_fin).slice(0, 5)}</strong></p>
+                            <p className="truncate">Responsable: <strong>{ev.responsable}</strong></p>
+                          </div>
+                        </div>
+
+                        <div className="pt-2.5 border-t border-slate-200/70 flex items-center justify-between">
+                          <button
+                            type="button"
+                            onClick={() => handleVerDetalle(ev)}
+                            className="text-xs font-bold text-[#1c355e] hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-sm">visibility</span>
+                            Detalle / Historial
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleEliminarEvento(ev)}
+                            className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                            title="Eliminar evento"
+                          >
+                            <span className="material-symbols-outlined text-base">delete</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })() : eventos.filter(ev => {
           const est = obtenerEstadoEvento(ev, ahora);
           if (filtroEstado !== 'todos' && est.toLowerCase() !== filtroEstado.toLowerCase()) return false;
           return true;
