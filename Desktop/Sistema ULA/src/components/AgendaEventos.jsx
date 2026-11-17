@@ -1089,9 +1089,16 @@ export default function AgendaEventos({ aulasList = [] }) {
             
             <div className="flex justify-between items-start border-b border-slate-100 pb-4">
               <div>
-                <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
-                  {eventoDetalle.tipo_evento}
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 bg-slate-100 text-slate-600 rounded-full">
+                    {eventoDetalle.tipo_evento}
+                  </span>
+                  {eventoDetalle.origen === 'SIPREF Reservas' && (
+                    <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 bg-[#fdbb11]/25 text-[#1c355e] border border-[#fdbb11]/50 rounded-full">
+                      SIPREF Reservas
+                    </span>
+                  )}
+                </div>
                 <h3 className="text-xl font-bold text-[#1c355e] mt-2">
                   {eventoDetalle.nombre_evento}
                 </h3>
@@ -1147,6 +1154,20 @@ export default function AgendaEventos({ aulasList = [] }) {
               <div className="text-xs">
                 <p className="text-slate-400 font-bold uppercase text-[10px] mb-1">Descripción</p>
                 <p className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-slate-700">{eventoDetalle.descripcion}</p>
+              </div>
+            )}
+
+            {Array.isArray(eventoDetalle.recursos) && eventoDetalle.recursos.length > 0 && (
+              <div className="text-xs space-y-1.5">
+                <p className="text-slate-400 font-bold uppercase text-[10px]">Materiales y Equipo</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {eventoDetalle.recursos.map((mat, i) => (
+                    <span key={i} className="px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 font-semibold text-slate-700">
+                      {mat.unidad !== 'sin_cantidad' && mat.unidad !== 'fijo' ? `${mat.cantidad} × ` : ''}
+                      {mat.nombre}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
 

@@ -8411,18 +8411,21 @@ def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, 
         except Exception:
             pass
 
-    # 4. Reservaciones en SIPREF Reservas (`reservas_reservaciones`)
+    # 4. Reservaciones en SIPREF Reservas (`reservas_reservaciones` — fechas guardadas en UTC)
     try:
-        nueva_fecha_inicio = dt_event_ini.strftime("%Y-%m-%d %H:%M:%S")
-        nueva_fecha_fin = dt_event_fin.strftime("%Y-%m-%d %H:%M:%S")
+        dt_ini_utc = dt_event_ini.replace(tzinfo=ZONA_HORARIA_INSTITUCIONAL).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        dt_fin_utc = dt_event_fin.replace(tzinfo=ZONA_HORARIA_INSTITUCIONAL).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        nueva_fecha_inicio = dt_ini_utc.strftime("%Y-%m-%d %H:%M:%S")
+        nueva_fecha_fin = dt_fin_utc.strftime("%Y-%m-%d %H:%M:%S")
+        aula_id_str = str(aula_db["id"]) if aula_db and aula_db.get("id") is not None else aula_nombre
         cursor.execute("""
             SELECT codigo, nombre_evento, responsable, inicio, fin
             FROM reservas_reservaciones
-            WHERE (espacio_id = %s OR espacio_nombre = %s)
+            WHERE (espacio_id = %s OR espacio_id = %s OR espacio_nombre = %s)
               AND estado = 'PROGRAMADA'
               AND (%s < fin AND %s > inicio)
             LIMIT 1
-        """, (aula_nombre, aula_nombre, nueva_fecha_inicio, nueva_fecha_fin))
+        """, (aula_nombre, aula_id_str, aula_nombre, nueva_fecha_inicio, nueva_fecha_fin))
         reserva_conflicto = cursor.fetchone()
         if reserva_conflicto:
             return (
@@ -8503,6 +8506,102 @@ def api_crear_evento(data: EventoCreateSchema):
         connection.close()
 
 
+def _utc_a_local(dt_val) -> Optional[datetime]:
+    """Convierte un datetime almacenado en UTC (SIPREF Reservas) a hora local America/Merida sin tzinfo."""
+    if not dt_val:
+        return None
+    if isinstance(dt_val, str):
+        try:
+            dt_val = datetime.fromisoformat(dt_val.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    try:
+        if dt_val.tzinfo is None:
+            dt_val = dt_val.replace(tzinfo=ZoneInfo("UTC"))
+        return dt_val.astimezone(ZONA_HORARIA_INSTITUCIONAL).replace(tzinfo=None)
+    except Exception:
+        return dt_val.replace(tzinfo=None) - timedelta(hours=6)
+
+
+def _mapear_reserva_a_evento(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Convierte un registro de reservas_reservaciones al formato estándar de eventos_aulas en SIPREF."""
+    ini_local = _utc_a_local(res.get("inicio"))
+    fin_local = _utc_a_local(res.get("fin"))
+    fecha_str = ini_local.strftime("%Y-%m-%d") if ini_local else ""
+    h_ini_str = ini_local.strftime("%H:%M") if ini_local else "00:00"
+    h_fin_str = fin_local.strftime("%H:%M") if fin_local else "00:00"
+
+    estado_raw = str(res.get("estado") or "PROGRAMADA").upper()
+    if estado_raw == "CANCELADA":
+        estado_sipref = "Cancelado"
+    else:
+        estado_sipref = _calcular_estado_evento(fecha_str, h_ini_str, h_fin_str) if fecha_str else "Programado"
+
+    return {
+        "id": f"res-{res['id']}",
+        "origen": "SIPREF Reservas",
+        "codigo": res.get("codigo"),
+        "tipo_evento": res.get("tipo_evento") or "Evento",
+        "nombre_evento": res.get("nombre_evento") or "",
+        "aula_nombre": res.get("espacio_nombre") or res.get("espacio_id") or "",
+        "fecha": fecha_str,
+        "hora_inicio": h_ini_str,
+        "hora_fin": h_fin_str,
+        "responsable": res.get("responsable") or "",
+        "correo": res.get("correo_responsable") or "",
+        "descripcion": res.get("descripcion") or "",
+        "usuario_creador": res.get("creado_por") or "SIPREF Reservas",
+        "estado": estado_sipref,
+        "motivo_cancelacion": res.get("motivo_cancelacion"),
+        "fecha_cancelacion": str(_utc_a_local(res["cancelado_en"])) if res.get("cancelado_en") else None,
+        "created_at": str(_utc_a_local(res["creado_en"])) if res.get("creado_en") else None,
+    }
+
+
+def _consultar_reservas_como_eventos(
+    cursor,
+    busqueda: Optional[str] = None,
+    estado: Optional[str] = None,
+    tipo_evento: Optional[str] = None,
+    aula: Optional[str] = None,
+    fecha: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Consulta reservas_reservaciones en TiDB y aplica los mismos filtros de SIPREF."""
+    try:
+        cursor.execute("SELECT * FROM reservas_reservaciones ORDER BY inicio DESC")
+        filas = cursor.fetchall() or []
+    except Exception as e:
+        print(f"Advertencia al consultar reservas_reservaciones: {e}")
+        return []
+
+    resultado = []
+    b = busqueda.strip().lower() if busqueda else None
+
+    for r in filas:
+        ev = _mapear_reserva_a_evento(r)
+        if estado and estado != "todos" and ev["estado"].lower() != estado.lower():
+            continue
+        if tipo_evento and tipo_evento != "todos" and ev["tipo_evento"].lower() != tipo_evento.lower():
+            continue
+        if aula and aula != "todas" and ev["aula_nombre"] != aula:
+            continue
+        if fecha_inicio and ev["fecha"] < fecha_inicio:
+            continue
+        if fecha_fin and ev["fecha"] > fecha_fin:
+            continue
+        if fecha and not fecha_inicio and not fecha_fin and ev["fecha"] != fecha:
+            continue
+        if b:
+            texto = f"{ev['nombre_evento']} {ev['responsable']} {ev['correo']} {ev['aula_nombre']}".lower()
+            if b not in texto:
+                continue
+        resultado.append(ev)
+
+    return resultado
+
+
 @app.get("/api/eventos")
 def api_listar_eventos(
     busqueda: Optional[str] = None,
@@ -8546,7 +8645,20 @@ def api_listar_eventos(
                 row["fecha"] = str(row["fecha"])
                 row["hora_inicio"] = _formatear_hora_hhmm(row["hora_inicio"])
                 row["hora_fin"] = _formatear_hora_hhmm(row["hora_fin"])
+                row["origen"] = "SIPREF"
                 resultado.append(row)
+
+            # Incluir también las reservaciones creadas en SIPREF Reservas
+            reservas_eventos = _consultar_reservas_como_eventos(
+                cursor,
+                busqueda=busqueda,
+                estado=estado,
+                tipo_evento=tipo_evento,
+                aula=aula,
+                fecha=fecha,
+            )
+            resultado.extend(reservas_eventos)
+            resultado.sort(key=lambda x: (x.get("fecha") or "", x.get("hora_inicio") or ""), reverse=True)
 
             return resultado
     finally:
@@ -8596,7 +8708,21 @@ def _consultar_eventos_db(
 
             query += " ORDER BY fecha DESC, hora_inicio ASC"
             cursor.execute(query, params)
-            return cursor.fetchall()
+            rows = list(cursor.fetchall() or [])
+
+            reservas_eventos = _consultar_reservas_como_eventos(
+                cursor,
+                busqueda=busqueda,
+                estado=estado,
+                tipo_evento=tipo_evento,
+                aula=aula,
+                fecha=fecha,
+                fecha_inicio=fecha_inicio,
+                fecha_fin=fecha_fin,
+            )
+            rows.extend(reservas_eventos)
+            rows.sort(key=lambda x: (str(x.get("fecha") or ""), str(x.get("hora_inicio") or "")), reverse=True)
+            return rows
     finally:
         connection.close()
 
@@ -9043,11 +9169,16 @@ def api_eventos_hoy():
                 WHERE fecha = %s AND estado IN ('Programado', 'En curso')
                 ORDER BY hora_inicio ASC
             """, (today_str,))
-            rows = cursor.fetchall()
+            rows = list(cursor.fetchall() or [])
             for r in rows:
                 r["fecha"] = str(r["fecha"])
                 r["hora_inicio"] = _formatear_hora_hhmm(r["hora_inicio"])
                 r["hora_fin"] = _formatear_hora_hhmm(r["hora_fin"])
+                r["origen"] = "SIPREF"
+            for r_res in _consultar_reservas_como_eventos(cursor, fecha=today_str):
+                if r_res.get("estado") in ("Programado", "En curso"):
+                    rows.append(r_res)
+            rows.sort(key=lambda x: x.get("hora_inicio") or "")
             return rows
     finally:
         connection.close()
@@ -9071,11 +9202,17 @@ def api_eventos_notificaciones_activas():
                 WHERE e.fecha = %s AND e.estado IN ('Programado', 'En curso')
                 ORDER BY e.hora_inicio ASC
             """, (today_str,))
-            eventos_hoy = cursor.fetchall()
+            eventos_hoy = list(cursor.fetchall() or [])
             for r in eventos_hoy:
                 r["fecha"] = str(r["fecha"])
                 r["hora_inicio"] = _formatear_hora_hhmm(r["hora_inicio"])
                 r["hora_fin"] = _formatear_hora_hhmm(r["hora_fin"])
+                r["origen"] = "SIPREF"
+
+            for r_res in _consultar_reservas_como_eventos(cursor, fecha=today_str):
+                if r_res.get("estado") in ("Programado", "En curso"):
+                    eventos_hoy.append(r_res)
+            eventos_hoy.sort(key=lambda x: x.get("hora_inicio") or "")
 
             # Recordatorios procesados recientemente (últimas 24 horas)
             cursor.execute("""
@@ -9103,14 +9240,66 @@ def api_eventos_notificaciones_activas():
 
 
 @app.get("/api/eventos/{evento_id}")
-def api_obtener_evento(evento_id: int):
+def api_obtener_evento(evento_id: str):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
+            if str(evento_id).startswith("res-"):
+                res_uuid = str(evento_id)[4:]
+                cursor.execute("SELECT * FROM reservas_reservaciones WHERE id = %s", (res_uuid,))
+                res = cursor.fetchone()
+                if not res:
+                    raise HTTPException(status_code=404, detail="Reservación no encontrada.")
+
+                ev = _mapear_reserva_a_evento(res)
+                try:
+                    cursor.execute("""
+                        SELECT id, canal AS tipo, anticipacion AS antencion_valor, unidad AS antencion_unidad,
+                               enviar_en AS fecha_programada, enviado_en AS fecha_envio,
+                               CASE
+                                   WHEN enviado_en IS NOT NULL THEN 'enviado'
+                                   WHEN ultimo_error IS NOT NULL THEN 'error'
+                                   ELSE 'pendiente'
+                               END AS estado
+                        FROM reservas_recordatorios
+                        WHERE reservacion_id = %s
+                        ORDER BY id ASC
+                    """, (res_uuid,))
+                    recs = cursor.fetchall() or []
+                    for r in recs:
+                        r["fecha_programada"] = str(_utc_a_local(r["fecha_programada"])) if r.get("fecha_programada") else None
+                        r["fecha_envio"] = str(_utc_a_local(r["fecha_envio"])) if r.get("fecha_envio") else None
+                    ev["recordatorios"] = recs
+                except Exception:
+                    ev["recordatorios"] = []
+
+                try:
+                    cursor.execute("""
+                        SELECT rre.recurso_id, rre.cantidad, rrc.nombre, rrc.unidad
+                        FROM reservas_recursos_evento rre
+                        JOIN reservas_recursos_catalogo rrc ON rre.recurso_id = rrc.id
+                        WHERE rre.reservacion_id = %s
+                        ORDER BY rrc.nombre ASC
+                    """, (res_uuid,))
+                    ev["recursos"] = cursor.fetchall() or []
+                except Exception:
+                    ev["recursos"] = []
+
+                ev["historial"] = [
+                    {
+                        "id": 1,
+                        "usuario": ev.get("usuario_creador") or "SIPREF Reservas",
+                        "accion": "Creado en SIPREF Reservas",
+                        "detalles": f"Código: {ev.get('codigo') or res_uuid}.",
+                        "fecha": ev.get("created_at") or ev.get("fecha"),
+                    }
+                ]
+                return ev
+
             _sincronizar_estados_eventos(cursor)
             connection.commit()
 
-            cursor.execute("SELECT * FROM eventos_aulas WHERE id = %s", (evento_id,))
+            cursor.execute("SELECT * FROM eventos_aulas WHERE id = %s", (int(evento_id),))
             ev = cursor.fetchone()
             if not ev:
                 raise HTTPException(status_code=404, detail="Evento no encontrado.")
@@ -9240,11 +9429,29 @@ def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
 
 
 @app.post("/api/eventos/{evento_id}/cancelar")
-def api_cancelar_evento(evento_id: int, data: EventoCancelarSchema):
+def api_cancelar_evento(evento_id: str, data: EventoCancelarSchema):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT * FROM eventos_aulas WHERE id = %s", (evento_id,))
+            if str(evento_id).startswith("res-"):
+                res_uuid = str(evento_id)[4:]
+                cursor.execute("SELECT id FROM reservas_reservaciones WHERE id = %s", (res_uuid,))
+                if not cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="Reservación no encontrada.")
+                cursor.execute("""
+                    UPDATE reservas_reservaciones
+                    SET estado = 'CANCELADA',
+                        motivo_cancelacion = %s,
+                        cancelado_por = %s,
+                        cancelado_en = UTC_TIMESTAMP(),
+                        actualizado_en = UTC_TIMESTAMP()
+                    WHERE id = %s
+                """, (data.motivo_cancelacion, data.usuario or "Prefectura", res_uuid))
+                connection.commit()
+                return {"success": True, "message": "Reservación cancelada y aula liberada."}
+
+            ev_id_int = int(evento_id)
+            cursor.execute("SELECT * FROM eventos_aulas WHERE id = %s", (ev_id_int,))
             ev = cursor.fetchone()
             if not ev:
                 raise HTTPException(status_code=404, detail="Evento no encontrado.")
@@ -9254,16 +9461,16 @@ def api_cancelar_evento(evento_id: int, data: EventoCancelarSchema):
             cursor.execute("""
                 UPDATE eventos_aulas SET estado = 'Cancelado', motivo_cancelacion = %s, fecha_cancelacion = %s
                 WHERE id = %s
-            """, (data.motivo_cancelacion, now_str, evento_id))
+            """, (data.motivo_cancelacion, now_str, ev_id_int))
 
             cursor.execute("""
                 UPDATE eventos_recordatorios SET estado = 'cancelado' WHERE evento_id = %s AND estado = 'pendiente'
-            """, (evento_id,))
+            """, (ev_id_int,))
 
             cursor.execute("""
                 INSERT INTO eventos_historial (evento_id, usuario, accion, detalles)
                 VALUES (%s, %s, 'Cancelado', %s)
-            """, (evento_id, data.usuario or "Prefectura", f"Evento cancelado. Motivo: {data.motivo_cancelacion}."))
+            """, (ev_id_int, data.usuario or "Prefectura", f"Evento cancelado. Motivo: {data.motivo_cancelacion}."))
 
             connection.commit()
             return {"success": True, "message": "Evento cancelado y aula liberada."}
@@ -9272,23 +9479,38 @@ def api_cancelar_evento(evento_id: int, data: EventoCancelarSchema):
 
 
 @app.delete("/api/eventos/{evento_id}")
-def api_eliminar_evento(evento_id: int):
+def api_eliminar_evento(evento_id: str):
     """Elimina permanentemente un evento, sus recordatorios y su historial de la base de datos."""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, nombre_evento, aula_nombre FROM eventos_aulas WHERE id = %s", (evento_id,))
+            if str(evento_id).startswith("res-"):
+                res_uuid = str(evento_id)[4:]
+                cursor.execute("SELECT id FROM reservas_reservaciones WHERE id = %s", (res_uuid,))
+                if not cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="Reservación no encontrada.")
+                try:
+                    cursor.execute("DELETE FROM reservas_recordatorios WHERE reservacion_id = %s", (res_uuid,))
+                    cursor.execute("DELETE FROM reservas_recursos_evento WHERE reservacion_id = %s", (res_uuid,))
+                except Exception:
+                    pass
+                cursor.execute("DELETE FROM reservas_reservaciones WHERE id = %s", (res_uuid,))
+                connection.commit()
+                return {"success": True, "message": f"Reservación {res_uuid} eliminada exitosamente de la base de datos."}
+
+            ev_id_int = int(evento_id)
+            cursor.execute("SELECT id, nombre_evento, aula_nombre FROM eventos_aulas WHERE id = %s", (ev_id_int,))
             ev = cursor.fetchone()
             if not ev:
                 raise HTTPException(status_code=404, detail="Evento no encontrado.")
 
-            cursor.execute("DELETE FROM eventos_recordatorios WHERE evento_id = %s", (evento_id,))
-            cursor.execute("DELETE FROM eventos_historial WHERE evento_id = %s", (evento_id,))
+            cursor.execute("DELETE FROM eventos_recordatorios WHERE evento_id = %s", (ev_id_int,))
+            cursor.execute("DELETE FROM eventos_historial WHERE evento_id = %s", (ev_id_int,))
             try:
-                cursor.execute("DELETE FROM eventos_aulas_recursos WHERE evento_id = %s", (evento_id,))
+                cursor.execute("DELETE FROM eventos_aulas_recursos WHERE evento_id = %s", (ev_id_int,))
             except Exception:
                 pass
-            cursor.execute("DELETE FROM eventos_aulas WHERE id = %s", (evento_id,))
+            cursor.execute("DELETE FROM eventos_aulas WHERE id = %s", (ev_id_int,))
 
             connection.commit()
             return {"success": True, "message": f"Evento #{evento_id} eliminado exitosamente de la base de datos."}
