@@ -41,6 +41,7 @@ export default function AgendarEventoModal({
   const [nuevoMaterialNombre, setNuevoMaterialNombre] = useState('');
   const [nuevoMaterialRequiereCantidad, setNuevoMaterialRequiereCantidad] = useState(true);
   const [guardandoMaterial, setGuardandoMaterial] = useState(false);
+  const [materialesDesplegados, setMaterialesDesplegados] = useState(false);
 
   const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
@@ -130,6 +131,7 @@ export default function AgendarEventoModal({
     setMostrarNuevoMaterial(false);
     setNuevoMaterialNombre('');
     setNuevoMaterialRequiereCantidad(true);
+    setMaterialesDesplegados(Boolean(eventoAEditar?.recursos?.length));
     setErrorDisponibilidad('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, eventoAEditar?.id]);
@@ -666,24 +668,39 @@ export default function AgendarEventoModal({
             />
           </div>
 
-          {/* SECCIÓN MATERIALES Y EQUIPO */}
+          {/* SECCIÓN MATERIALES Y EQUIPO (DESPLEGABLE) */}
           <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-3">
-            <div className="border-b border-slate-200 pb-2.5">
+            <button
+              type="button"
+              onClick={() => setMaterialesDesplegados(prev => !prev)}
+              className={`w-full text-left cursor-pointer ${materialesDesplegados ? 'border-b border-slate-200 pb-2.5' : ''}`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-[#1c355e]">
                   <span className="material-symbols-outlined text-xl">inventory_2</span>
                   <h4 className="text-xs font-bold uppercase tracking-wider">MATERIALES Y EQUIPO</h4>
                 </div>
-                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#fdbb11]/25 border border-[#fdbb11]/60 text-[#1c355e]">
-                  {cantidadMaterialesSeleccionados} {cantidadMaterialesSeleccionados === 1 ? 'seleccionado' : 'seleccionados'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#fdbb11]/25 border border-[#fdbb11]/60 text-[#1c355e]">
+                    {cantidadMaterialesSeleccionados} {cantidadMaterialesSeleccionados === 1 ? 'seleccionado' : 'seleccionados'}
+                  </span>
+                  <span
+                    className={`material-symbols-outlined text-[#1c355e] text-xl transition-transform duration-200 ${
+                      materialesDesplegados ? 'rotate-180' : ''
+                    }`}
+                  >
+                    expand_more
+                  </span>
+                </div>
               </div>
               <p className="text-xs text-slate-500 font-medium mt-1">
                 Marca el equipo y mobiliario que se utilizará en el evento
               </p>
-            </div>
+            </button>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {materialesDesplegados && (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {recursosCatalogo.map((rec) => {
                 const marcado = recursosSeleccionados[rec.id] !== undefined;
                 const cantidad = recursosSeleccionados[rec.id] || 1;
@@ -815,6 +832,8 @@ export default function AgendarEventoModal({
                   </button>
                 </div>
               </div>
+            )}
+              </>
             )}
 
             <p className="text-[11px] text-slate-500 font-medium pt-1">
