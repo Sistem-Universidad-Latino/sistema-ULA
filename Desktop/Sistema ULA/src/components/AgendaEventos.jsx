@@ -732,6 +732,7 @@ export default function AgendaEventos({ aulasList = [] }) {
                   <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>En curso</span>
                   <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span>Finalizado</span>
                   <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500"></span>Cancelado</span>
+                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#fdbb11]"></span>SIPREF Reservas</span>
                 </div>
               </div>
 
@@ -787,6 +788,7 @@ export default function AgendaEventos({ aulasList = [] }) {
                       <div className="space-y-1 flex-1 overflow-hidden">
                         {listaDia.slice(0, 3).map((ev) => {
                           const est = obtenerEstadoEvento(ev, ahora);
+                          const esDeReservas = ev.origen === 'SIPREF Reservas' || String(ev.id).startsWith('res-');
                           return (
                             <button
                               key={ev.id}
@@ -796,10 +798,15 @@ export default function AgendaEventos({ aulasList = [] }) {
                                 setDiaSeleccionado(celda.fechaStr);
                                 handleVerDetalle(ev);
                               }}
-                              title={`${String(ev.hora_inicio).slice(0, 5)} - ${ev.nombre_evento} (Aula ${ev.aula_nombre})`}
-                              className={`w-full text-left px-1.5 py-0.5 rounded-md border text-[10px] font-bold truncate transition-colors cursor-pointer ${getPillClasses(est)}`}
+                              title={`${esDeReservas ? '[SIPREF Reservas] ' : ''}${String(ev.hora_inicio).slice(0, 5)} - ${ev.nombre_evento} (Aula ${ev.aula_nombre})`}
+                              className={`w-full text-left px-1.5 py-0.5 rounded-md border text-[10px] font-bold truncate transition-colors cursor-pointer flex items-center gap-1 ${getPillClasses(est)} ${esDeReservas ? 'border-l-[3px] border-l-[#fdbb11]' : ''}`}
                             >
-                              {String(ev.hora_inicio).slice(0, 5)} · {ev.nombre_evento}
+                              {esDeReservas && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#fdbb11] shrink-0" />
+                              )}
+                              <span className="truncate">
+                                {String(ev.hora_inicio).slice(0, 5)} · {ev.nombre_evento}
+                              </span>
                             </button>
                           );
                         })}
@@ -854,6 +861,7 @@ export default function AgendaEventos({ aulasList = [] }) {
                   {eventosDelDia.map((ev) => {
                     const estadoEfectivo = obtenerEstadoEvento(ev, ahora);
                     const badge = getBadgeEstado(estadoEfectivo);
+                    const esDeReservas = ev.origen === 'SIPREF Reservas' || String(ev.id).startsWith('res-');
                     return (
                       <div
                         key={`cal-det-${ev.id}`}
@@ -862,15 +870,24 @@ export default function AgendaEventos({ aulasList = [] }) {
                             ? 'border-red-200 bg-red-50/20 opacity-85'
                             : estadoEfectivo === 'En curso'
                             ? 'border-emerald-400 bg-emerald-50/10'
+                            : esDeReservas
+                            ? 'border-amber-300/90 bg-amber-50/20 hover:bg-white hover:shadow-sm'
                             : 'border-slate-200 bg-slate-50/40 hover:bg-white hover:shadow-sm'
                         }`}
                       >
                         <div>
                           <div className="flex items-start justify-between gap-2 mb-2">
-                            <span className="px-2.5 py-0.5 bg-slate-100 text-slate-700 font-bold text-[10px] rounded-full uppercase">
-                              {ev.tipo_evento}
-                            </span>
-                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border flex items-center gap-1 ${badge.cls}`}>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="px-2.5 py-0.5 bg-slate-100 text-slate-700 font-bold text-[10px] rounded-full uppercase">
+                                {ev.tipo_evento}
+                              </span>
+                              {esDeReservas && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-[#fdbb11]/25 text-[#1c355e] border border-[#fdbb11]/60">
+                                  SIPREF Reservas
+                                </span>
+                              )}
+                            </div>
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border flex items-center gap-1 shrink-0 ${badge.cls}`}>
                               <span className="material-symbols-outlined text-xs">{badge.icon}</span>
                               {badge.label}
                             </span>
@@ -930,6 +947,7 @@ export default function AgendaEventos({ aulasList = [] }) {
             .map((ev) => {
               const estadoEfectivo = obtenerEstadoEvento(ev, ahora);
               const badge = getBadgeEstado(estadoEfectivo);
+              const esDeReservas = ev.origen === 'SIPREF Reservas' || String(ev.id).startsWith('res-');
               return (
                 <div
                   key={ev.id}
@@ -938,16 +956,26 @@ export default function AgendaEventos({ aulasList = [] }) {
                       ? 'border-red-200 bg-red-50/20 opacity-80'
                       : estadoEfectivo === 'En curso'
                       ? 'border-emerald-400 ring-2 ring-emerald-200/70 shadow-md bg-emerald-50/10'
+                      : esDeReservas
+                      ? 'border-amber-300/90 ring-1 ring-amber-200/60 shadow-xs hover:shadow-md'
                       : 'border-slate-200 shadow-xs hover:shadow-md'
                   }`}
                 >
                   <div>
                     {/* CABECERA TARJETA */}
                     <div className="flex items-start justify-between gap-2 mb-3">
-                      <span className="px-3 py-1 bg-slate-100 text-slate-700 font-bold text-[11px] rounded-full uppercase tracking-wider">
-                        {ev.tipo_evento}
-                      </span>
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border flex items-center gap-1 ${badge.cls}`}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="px-3 py-1 bg-slate-100 text-slate-700 font-bold text-[11px] rounded-full uppercase tracking-wider">
+                          {ev.tipo_evento}
+                        </span>
+                        {esDeReservas && (
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-[#fdbb11]/25 text-[#1c355e] border border-[#fdbb11]/60 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#fdbb11]"></span>
+                            SIPREF Reservas
+                          </span>
+                        )}
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border flex items-center gap-1 shrink-0 ${badge.cls}`}>
                         <span className="material-symbols-outlined text-xs">{badge.icon}</span>
                         {badge.label}
                       </span>
@@ -993,13 +1021,15 @@ export default function AgendaEventos({ aulasList = [] }) {
                     <div className="flex items-center gap-1">
                       {estadoEfectivo !== 'Cancelado' && estadoEfectivo !== 'Finalizado' && (
                         <>
-                          <button
-                            onClick={() => handleEditar(ev)}
-                            className="p-2 text-slate-500 hover:text-[#1c355e] hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
-                            title="Editar evento"
-                          >
-                            <span className="material-symbols-outlined text-lg">edit</span>
-                          </button>
+                          {!esDeReservas && (
+                            <button
+                              onClick={() => handleEditar(ev)}
+                              className="p-2 text-slate-500 hover:text-[#1c355e] hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                              title="Editar evento"
+                            >
+                              <span className="material-symbols-outlined text-lg">edit</span>
+                            </button>
+                          )}
                           <button
                             onClick={() => setModalCancelar(ev)}
                             className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-all cursor-pointer"
