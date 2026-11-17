@@ -3708,6 +3708,7 @@ def obtener_clases_hoy(dia: Optional[int] = None, mins: Optional[int] = None, fe
         with connection.cursor() as cursor:
             # ── 1) Obtener estado académico de cada plan ──────────────────
             hay_clases_plan = {}
+            ciclo_actual_estado = f"{date_obj.year}-{date_obj.year + 1}" if date_obj.month >= 8 else f"{date_obj.year - 1}-{date_obj.year}"
             for plan in ('semestral', 'cuatrimestral'):
                 # Verificar suspensión de clases por evento
                 cursor.execute("""
@@ -3747,6 +3748,7 @@ def obtener_clases_hoy(dia: Optional[int] = None, mins: Optional[int] = None, fe
                         if ultimo_inicio['ciclo'] == proximo_fin['ciclo'] and ultimo_inicio['periodo'] == proximo_fin['periodo']:
                             en_periodo = True
                             periodo_info = {'ciclo': ultimo_inicio['ciclo'], 'periodo': ultimo_inicio['periodo']}
+                            ciclo_actual_estado = ultimo_inicio['ciclo']
 
                     if not en_periodo and not eventos:
                         clases_ok = False  # Receso
@@ -3820,6 +3822,7 @@ def obtener_clases_hoy(dia: Optional[int] = None, mins: Optional[int] = None, fe
                 # Formato "07 de agosto" (como lo almacena el parser del PDF)
                 date_str_texto = f"{date_obj.day:02d} de {meses_nombres[date_obj.month]}"
                 date_str_iso = date_obj.strftime("%Y-%m-%d")
+                date_str_ddmmyyyy = date_obj.strftime("%d/%m/%Y")
                 cursor.execute("""
                     SELECT materia FROM examenes_calendario 
                     WHERE ciclo_escolar = %s
