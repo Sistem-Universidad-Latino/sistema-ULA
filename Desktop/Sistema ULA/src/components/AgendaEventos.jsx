@@ -899,7 +899,10 @@ export default function AgendaEventos({ aulasList = [] }) {
                             <p className="font-bold text-indigo-900">Aula {ev.aula_nombre}</p>
                             <p>Horario: <strong>{String(ev.hora_inicio).slice(0, 5)} - {String(ev.hora_fin).slice(0, 5)}</strong></p>
                             <p className="truncate">Responsable: <strong>{ev.responsable}</strong></p>
-                            <p className="truncate">Creado por: <strong>{ev.usuario_creador || 'Prefectura'}</strong></p>
+                            <p className="truncate">
+                              Creado por: <strong>{ev.usuario_creador || 'Prefectura'}</strong>
+                              {ev.usuario_creador_correo ? <span className="text-slate-400 font-normal"> ({ev.usuario_creador_correo})</span> : null}
+                            </p>
                           </div>
                         </div>
 
@@ -1010,9 +1013,14 @@ export default function AgendaEventos({ aulasList = [] }) {
                         <span className="truncate">Responsable: <strong className="text-slate-800">{ev.responsable}</strong></span>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-base text-slate-400">badge</span>
-                        <span className="truncate">Creado por: <strong className="text-slate-800">{ev.usuario_creador || 'Prefectura'}</strong></span>
+                      <div className="flex items-start gap-2">
+                        <span className="material-symbols-outlined text-base text-slate-400 mt-0.5">badge</span>
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate">Creado por: <strong className="text-slate-800">{ev.usuario_creador || 'Prefectura'}</strong></span>
+                          {ev.usuario_creador_correo && (
+                            <span className="block truncate text-[11px] text-slate-400">{ev.usuario_creador_correo}</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1192,7 +1200,8 @@ export default function AgendaEventos({ aulasList = [] }) {
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-1">
                 <p className="text-slate-400 font-bold uppercase text-[10px]">Creado por</p>
                 <p className="font-bold text-[#1c355e]">{eventoDetalle.usuario_creador || 'Prefectura'}</p>
-                <p className="text-slate-500">{eventoDetalle.origen || 'SIPREF'}</p>
+                <p className="text-slate-500 break-all">{eventoDetalle.usuario_creador_correo || '—'}</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">{eventoDetalle.origen || 'SIPREF'}</p>
               </div>
             </div>
 

@@ -8551,6 +8551,7 @@ def _mapear_reserva_a_evento(res: Dict[str, Any]) -> Dict[str, Any]:
         "correo": res.get("correo_responsable") or "",
         "descripcion": res.get("descripcion") or "",
         "usuario_creador": res.get("usuario_creador_nombre") or res.get("creado_por") or "SIPREF Reservas",
+        "usuario_creador_correo": res.get("usuario_creador_correo") or res.get("correo_responsable") or "",
         "estado": estado_sipref,
         "motivo_cancelacion": res.get("motivo_cancelacion"),
         "fecha_cancelacion": str(_utc_a_local(res["cancelado_en"])) if res.get("cancelado_en") else None,
@@ -8572,7 +8573,8 @@ def _consultar_reservas_como_eventos(
     try:
         cursor.execute("""
             SELECT rr.*,
-                   COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre
+                   COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre,
+                   COALESCE(NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.correo_responsable), ''), '') AS usuario_creador_correo
             FROM reservas_reservaciones rr
             LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
             ORDER BY rr.inicio DESC
@@ -8600,7 +8602,7 @@ def _consultar_reservas_como_eventos(
         if fecha and not fecha_inicio and not fecha_fin and ev["fecha"] != fecha:
             continue
         if b:
-            texto = f"{ev['nombre_evento']} {ev['responsable']} {ev['correo']} {ev['aula_nombre']} {ev['usuario_creador']}".lower()
+            texto = f"{ev['nombre_evento']} {ev['responsable']} {ev['correo']} {ev['aula_nombre']} {ev['usuario_creador']} {ev.get('usuario_creador_correo', '')}".lower()
             if b not in texto:
                 continue
         resultado.append(ev)
@@ -8646,12 +8648,24 @@ def api_listar_eventos(
             cursor.execute(query, params)
             rows = cursor.fetchall()
 
+            mapa_correos = {}
+            try:
+                cursor.execute("SELECT nombre, correo FROM usuarios")
+                for u_row in (cursor.fetchall() or []):
+                    n_key = (u_row.get("nombre") or "").strip().lower()
+                    if n_key and u_row.get("correo"):
+                        mapa_correos[n_key] = u_row["correo"]
+            except Exception:
+                pass
+
             resultado = []
             for row in rows:
                 row["fecha"] = str(row["fecha"])
                 row["hora_inicio"] = _formatear_hora_hhmm(row["hora_inicio"])
                 row["hora_fin"] = _formatear_hora_hhmm(row["hora_fin"])
                 row["origen"] = "SIPREF"
+                creador_key = (row.get("usuario_creador") or "").strip().lower()
+                row["usuario_creador_correo"] = mapa_correos.get(creador_key, "")
                 resultado.append(row)
 
             # Incluir también las reservaciones creadas en SIPREF Reservas
@@ -9254,7 +9268,8 @@ def api_obtener_evento(evento_id: str):
                 res_uuid = str(evento_id)[4:]
                 cursor.execute("""
                     SELECT rr.*,
-                           COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre
+                           COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre,
+                           COALESCE(NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.correo_responsable), ''), '') AS usuario_creador_correo
                     FROM reservas_reservaciones rr
                     LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
                     WHERE rr.id = %s
@@ -9319,6 +9334,16 @@ def api_obtener_evento(evento_id: str):
             ev["fecha"] = str(ev["fecha"])
             ev["hora_inicio"] = _formatear_hora_hhmm(ev["hora_inicio"])
             ev["hora_fin"] = _formatear_hora_hhmm(ev["hora_fin"])
+            ev["origen"] = "SIPREF"
+            try:
+                cursor.execute(
+                    "SELECT correo FROM usuarios WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s)) LIMIT 1",
+                    (ev.get("usuario_creador") or "",),
+                )
+                u_match = cursor.fetchone()
+                ev["usuario_creador_correo"] = u_match["correo"] if u_match and u_match.get("correo") else ""
+            except Exception:
+                ev["usuario_creador_correo"] = ""
 
             cursor.execute("SELECT * FROM eventos_recordatorios WHERE evento_id = %s ORDER BY id ASC", (evento_id,))
             recs = cursor.fetchall()
