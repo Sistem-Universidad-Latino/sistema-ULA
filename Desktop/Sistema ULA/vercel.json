@@ -10,11 +10,11 @@
     },
     {
       "source": "/api/:path*",
-      "destination": "https://sistema-ula-backend.onrender.com/api/:path*"
+      "destination": "https://sistema-ula-backend-18ld.onrender.com/api/:path*"
     },
     {
       "source": "/upload-pdf",
-      "destination": "https://sistema-ula-backend.onrender.com/upload-pdf"
+      "destination": "https://sistema-ula-backend-18ld.onrender.com/upload-pdf"
     },
     {
       "source": "/(.*)",

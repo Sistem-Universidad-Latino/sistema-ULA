@@ -63,7 +63,7 @@ const functionSource = `'use strict';
 const tls = require('node:tls');
 const crypto = require('node:crypto');
 
-const DEFAULT_BACKEND_URL = 'https://sistema-ula-backend.onrender.com';
+const DEFAULT_BACKEND_URL = 'https://sistema-ula-backend-18ld.onrender.com';
 const DEFAULT_SMTP_HOST = 'smtp.gmail.com';
 const DEFAULT_SMTP_PORT = 465;
 const DEFAULT_SMTP_USER = 'soporte.sipref.software@gmail.com';
