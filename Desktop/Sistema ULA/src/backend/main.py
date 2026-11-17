@@ -8550,7 +8550,7 @@ def _mapear_reserva_a_evento(res: Dict[str, Any]) -> Dict[str, Any]:
         "responsable": res.get("responsable") or "",
         "correo": res.get("correo_responsable") or "",
         "descripcion": res.get("descripcion") or "",
-        "usuario_creador": res.get("creado_por") or "SIPREF Reservas",
+        "usuario_creador": res.get("usuario_creador_nombre") or res.get("creado_por") or "SIPREF Reservas",
         "estado": estado_sipref,
         "motivo_cancelacion": res.get("motivo_cancelacion"),
         "fecha_cancelacion": str(_utc_a_local(res["cancelado_en"])) if res.get("cancelado_en") else None,
@@ -8570,7 +8570,13 @@ def _consultar_reservas_como_eventos(
 ) -> List[Dict[str, Any]]:
     """Consulta reservas_reservaciones en TiDB y aplica los mismos filtros de SIPREF."""
     try:
-        cursor.execute("SELECT * FROM reservas_reservaciones ORDER BY inicio DESC")
+        cursor.execute("""
+            SELECT rr.*,
+                   COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre
+            FROM reservas_reservaciones rr
+            LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
+            ORDER BY rr.inicio DESC
+        """)
         filas = cursor.fetchall() or []
     except Exception as e:
         print(f"Advertencia al consultar reservas_reservaciones: {e}")
@@ -8594,7 +8600,7 @@ def _consultar_reservas_como_eventos(
         if fecha and not fecha_inicio and not fecha_fin and ev["fecha"] != fecha:
             continue
         if b:
-            texto = f"{ev['nombre_evento']} {ev['responsable']} {ev['correo']} {ev['aula_nombre']}".lower()
+            texto = f"{ev['nombre_evento']} {ev['responsable']} {ev['correo']} {ev['aula_nombre']} {ev['usuario_creador']}".lower()
             if b not in texto:
                 continue
         resultado.append(ev)
@@ -9246,7 +9252,13 @@ def api_obtener_evento(evento_id: str):
         with connection.cursor() as cursor:
             if str(evento_id).startswith("res-"):
                 res_uuid = str(evento_id)[4:]
-                cursor.execute("SELECT * FROM reservas_reservaciones WHERE id = %s", (res_uuid,))
+                cursor.execute("""
+                    SELECT rr.*,
+                           COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre
+                    FROM reservas_reservaciones rr
+                    LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
+                    WHERE rr.id = %s
+                """, (res_uuid,))
                 res = cursor.fetchone()
                 if not res:
                     raise HTTPException(status_code=404, detail="Reservación no encontrada.")

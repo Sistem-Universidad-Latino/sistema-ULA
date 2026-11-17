@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import Swal from 'sweetalert2';
 import AgendarEventoModal from './AgendarEventoModal';
 import { useTime } from './TimeContext';
+import { useUser } from './UserContext';
 
 /**
  * Calcula el estado dinámico de un evento en tiempo real comparando con la hora institucional/actual
@@ -85,6 +86,7 @@ function useDraggableModal() {
 
 export default function AgendaEventos({ aulasList = [] }) {
   const ahora = useTime();
+  const { usuario } = useUser();
   const dragExport = useDraggableModal();
 
   const [eventos, setEventos] = useState([]);
@@ -235,7 +237,7 @@ export default function AgendaEventos({ aulasList = [] }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           motivo_cancelacion: motivoCancelar,
-          usuario: 'Prefectura'
+          usuario: usuario?.nombre || 'Prefectura'
         })
       });
       if (res.ok) {
@@ -897,6 +899,7 @@ export default function AgendaEventos({ aulasList = [] }) {
                             <p className="font-bold text-indigo-900">Aula {ev.aula_nombre}</p>
                             <p>Horario: <strong>{String(ev.hora_inicio).slice(0, 5)} - {String(ev.hora_fin).slice(0, 5)}</strong></p>
                             <p className="truncate">Responsable: <strong>{ev.responsable}</strong></p>
+                            <p className="truncate">Creado por: <strong>{ev.usuario_creador || 'Prefectura'}</strong></p>
                           </div>
                         </div>
 
@@ -1006,6 +1009,11 @@ export default function AgendaEventos({ aulasList = [] }) {
                         <span className="material-symbols-outlined text-base text-slate-400">person</span>
                         <span className="truncate">Responsable: <strong className="text-slate-800">{ev.responsable}</strong></span>
                       </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-base text-slate-400">badge</span>
+                        <span className="truncate">Creado por: <strong className="text-slate-800">{ev.usuario_creador || 'Prefectura'}</strong></span>
+                      </div>
                     </div>
                   </div>
 
@@ -1067,6 +1075,7 @@ export default function AgendaEventos({ aulasList = [] }) {
         }}
         eventoAEditar={eventoAEditar}
         aulasList={aulasList}
+        usuarioLogueado={usuario?.nombre || 'Prefectura'}
       />
 
       {/* MODAL CANCELAR EVENTO */}
@@ -1174,10 +1183,17 @@ export default function AgendaEventos({ aulasList = [] }) {
               </div>
             </div>
 
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-1 text-xs">
-              <p className="text-slate-400 font-bold uppercase text-[10px]">Responsable</p>
-              <p className="font-bold text-slate-800">{eventoDetalle.responsable}</p>
-              <p className="text-slate-500">{eventoDetalle.correo}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-1">
+                <p className="text-slate-400 font-bold uppercase text-[10px]">Responsable</p>
+                <p className="font-bold text-slate-800">{eventoDetalle.responsable}</p>
+                <p className="text-slate-500">{eventoDetalle.correo || '—'}</p>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-1">
+                <p className="text-slate-400 font-bold uppercase text-[10px]">Creado por</p>
+                <p className="font-bold text-[#1c355e]">{eventoDetalle.usuario_creador || 'Prefectura'}</p>
+                <p className="text-slate-500">{eventoDetalle.origen || 'SIPREF'}</p>
+              </div>
             </div>
 
             {eventoDetalle.descripcion && (
