@@ -34,6 +34,14 @@ export default function AgendarEventoModal({
   const [probandoCorreo, setProbandoCorreo] = useState(false);
   const [errorDisponibilidad, setErrorDisponibilidad] = useState('');
 
+  // Materiales y equipo (catálogo compartido reservas_recursos_catalogo)
+  const [recursosCatalogo, setRecursosCatalogo] = useState([]);
+  const [recursosSeleccionados, setRecursosSeleccionados] = useState({});
+  const [mostrarNuevoMaterial, setMostrarNuevoMaterial] = useState(false);
+  const [nuevoMaterialNombre, setNuevoMaterialNombre] = useState('');
+  const [nuevoMaterialRequiereCantidad, setNuevoMaterialRequiereCantidad] = useState(true);
+  const [guardandoMaterial, setGuardandoMaterial] = useState(false);
+
   const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
   // Cargar aulas si no vienen en props
@@ -50,6 +58,18 @@ export default function AgendarEventoModal({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aulasList.length]);
+
+  // Cargar catálogo compartido de materiales y equipo cuando abre el modal
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch(`${API_URL}/api/recursos`)
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => {
+        if (Array.isArray(data)) setRecursosCatalogo(data);
+      })
+      .catch(err => console.error('Error al cargar catálogo de materiales:', err));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   // Reset form ONLY when the modal opens or when editing a different event
   useEffect(() => {
@@ -73,6 +93,16 @@ export default function AgendarEventoModal({
           antencion_unidad: r.antencion_unidad || 'minutos'
         })));
       }
+      if (Array.isArray(eventoAEditar.recursos) && eventoAEditar.recursos.length > 0) {
+        const mapa = {};
+        eventoAEditar.recursos.forEach(r => {
+          const rid = r.recurso_id ?? r.id;
+          if (rid) mapa[rid] = Math.max(1, Number(r.cantidad) || 1);
+        });
+        setRecursosSeleccionados(mapa);
+      } else {
+        setRecursosSeleccionados({});
+      }
     } else {
       const refDate = ahora instanceof Date ? ahora : new Date();
       const anio = refDate.getFullYear();
@@ -95,7 +125,11 @@ export default function AgendarEventoModal({
         { tipo: 'sipref', antencion_valor: 30, antencion_unidad: 'minutos' },
         { tipo: 'correo', antencion_valor: 1, antencion_unidad: 'horas' }
       ]);
+      setRecursosSeleccionados({});
     }
+    setMostrarNuevoMaterial(false);
+    setNuevoMaterialNombre('');
+    setNuevoMaterialRequiereCantidad(true);
     setErrorDisponibilidad('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, eventoAEditar?.id]);
@@ -211,10 +245,16 @@ export default function AgendarEventoModal({
 
     setGuardando(true);
     try {
+      const recursosPayload = Object.entries(recursosSeleccionados).map(([idStr, cant]) => ({
+        recurso_id: Number(idStr),
+        cantidad: Math.max(1, Number(cant) || 1)
+      }));
+
       const payload = {
         ...formData,
         usuario_creador: usuarioLogueado,
-        recordatorios: recordatorios
+        recordatorios: recordatorios,
+        recursos: recursosPayload
       };
 
       const url = eventoAEditar 
@@ -253,6 +293,174 @@ export default function AgendarEventoModal({
   };
 
   const aulasDisponibles = aulasList.length > 0 ? aulasList : aulasInternas;
+
+  const alternarMaterial = (recursoId, marcado) => {
+    setRecursosSeleccionados(prev => {
+      const next = { ...prev };
+      if (marcado) {
+        next[recursoId] = next[recursoId] || 1;
+      } else {
+        delete next[recursoId];
+      }
+      return next;
+    });
+  };
+
+  const cambiarCantidadMaterial = (recursoId, delta) => {
+    setRecursosSeleccionados(prev => {
+      const actual = prev[recursoId] || 1;
+      return {
+        ...prev,
+        [recursoId]: Math.max(1, actual + delta)
+      };
+    });
+  };
+
+  const handleGuardarNuevoMaterial = async () => {
+    const nombreLimpio = nuevoMaterialNombre.trim();
+    if (!nombreLimpio) {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'warning',
+        title: 'Escribe el nombre del material',
+        showConfirmButton: false,
+        timer: 2500
+      });
+      return;
+    }
+
+    setGuardandoMaterial(true);
+    try {
+      const res = await fetch(`${API_URL}/api/recursos`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-usuario': encodeURIComponent(usuarioLogueado || 'Prefectura')
+        },
+        body: JSON.stringify({
+          nombre: nombreLimpio,
+          unidad: nuevoMaterialRequiereCantidad ? 'pieza' : 'sin_cantidad'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudo agregar el material',
+          showConfirmButton: false,
+          timer: 3000
+        });
+        return;
+      }
+
+      setRecursosCatalogo(prev => {
+        const existe = prev.some(item => item.id === data.id);
+        if (existe) {
+          return prev.map(item => (item.id === data.id ? data : item));
+        }
+        return [...prev, data];
+      });
+      setRecursosSeleccionados(prev => ({ ...prev, [data.id]: 1 }));
+      setNuevoMaterialNombre('');
+      setNuevoMaterialRequiereCantidad(true);
+      setMostrarNuevoMaterial(false);
+
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: 'Material agregado al catálogo',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al guardar material',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    } finally {
+      setGuardandoMaterial(false);
+    }
+  };
+
+  const handleEliminarMaterial = async (rec) => {
+    const confirm = await Swal.fire({
+      title: 'Eliminar material',
+      text: '¿Eliminar este material del catálogo? Los eventos anteriores conservarán su registro.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc2626',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: 'Sí, eliminar',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      const res = await fetch(`${API_URL}/api/recursos/${rec.id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudo eliminar el material',
+          showConfirmButton: false,
+          timer: 3000
+        });
+        return;
+      }
+
+      setRecursosCatalogo(prev => prev.filter(item => item.id !== rec.id));
+      setRecursosSeleccionados(prev => {
+        const next = { ...prev };
+        delete next[rec.id];
+        return next;
+      });
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: 'Material eliminado del catálogo',
+        showConfirmButton: false,
+        timer: 2500
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al eliminar material',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    }
+  };
+
+  const cantidadMaterialesSeleccionados = Object.keys(recursosSeleccionados).length;
+  const textoResumenMateriales =
+    cantidadMaterialesSeleccionados === 0
+      ? 'Ningún material seleccionado'
+      : Object.entries(recursosSeleccionados)
+          .map(([idStr, cant]) => {
+            const mat = recursosCatalogo.find(r => String(r.id) === String(idStr));
+            if (!mat) return null;
+            const requiereCant = mat.unidad !== 'sin_cantidad' && mat.unidad !== 'fijo';
+            return requiereCant ? `${cant} ${mat.nombre}` : mat.nombre;
+          })
+          .filter(Boolean)
+          .join(', ');
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -456,6 +664,162 @@ export default function AgendarEventoModal({
               onChange={e => setFormData(prev => ({ ...prev, descripcion: e.target.value }))}
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none resize-none"
             />
+          </div>
+
+          {/* SECCIÓN MATERIALES Y EQUIPO */}
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-3">
+            <div className="border-b border-slate-200 pb-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-[#1c355e]">
+                  <span className="material-symbols-outlined text-xl">inventory_2</span>
+                  <h4 className="text-xs font-bold uppercase tracking-wider">MATERIALES Y EQUIPO</h4>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#fdbb11]/25 border border-[#fdbb11]/60 text-[#1c355e]">
+                  {cantidadMaterialesSeleccionados} {cantidadMaterialesSeleccionados === 1 ? 'seleccionado' : 'seleccionados'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 font-medium mt-1">
+                Marca el equipo y mobiliario que se utilizará en el evento
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {recursosCatalogo.map((rec) => {
+                const marcado = recursosSeleccionados[rec.id] !== undefined;
+                const cantidad = recursosSeleccionados[rec.id] || 1;
+                const requiereCantidad = rec.unidad !== 'sin_cantidad' && rec.unidad !== 'fijo';
+
+                return (
+                  <div
+                    key={rec.id}
+                    className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
+                      marcado
+                        ? 'bg-white border-[#1c355e]/40 shadow-xs'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <label className="flex items-center gap-2 font-semibold text-slate-700 cursor-pointer flex-1 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={marcado}
+                        onChange={(e) => alternarMaterial(rec.id, e.target.checked)}
+                        className="rounded text-[#1c355e] focus:ring-[#1c355e]"
+                      />
+                      <span className="truncate">{rec.nombre}</span>
+                      {rec.unidad === 'fijo' && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                          Fijo en aula
+                        </span>
+                      )}
+                    </label>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {marcado && requiereCantidad && (
+                        <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => cambiarCantidadMaterial(rec.id, -1)}
+                            className="px-2 py-1 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
+                            aria-label={`Disminuir ${rec.nombre}`}
+                          >
+                            −
+                          </button>
+                          <span className="px-2 py-1 font-extrabold text-[#1c355e] min-w-[24px] text-center">
+                            {cantidad}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => cambiarCantidadMaterial(rec.id, 1)}
+                            className="px-2 py-1 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
+                            aria-label={`Aumentar ${rec.nombre}`}
+                          >
+                            +
+                          </button>
+                        </div>
+                      )}
+
+                      {!rec.es_predefinido && (
+                        <button
+                          type="button"
+                          onClick={() => handleEliminarMaterial(rec)}
+                          className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                          title="Eliminar material del catálogo"
+                        >
+                          <span className="material-symbols-outlined text-base">delete</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {!mostrarNuevoMaterial ? (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setMostrarNuevoMaterial(true)}
+                  className="text-xs font-bold text-[#1c355e] hover:underline flex items-center gap-1 cursor-pointer"
+                >
+                  + Agregar otro material
+                </button>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-dashed border-[#1c355e]/30 p-3 space-y-2.5">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                  <input
+                    type="text"
+                    value={nuevoMaterialNombre}
+                    onChange={(e) => setNuevoMaterialNombre(e.target.value)}
+                    placeholder="Nombre del material"
+                    className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
+                  />
+                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer shrink-0 select-none">
+                    <span>¿Requiere cantidad?</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={nuevoMaterialRequiereCantidad}
+                      onClick={() => setNuevoMaterialRequiereCantidad(prev => !prev)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer ${
+                        nuevoMaterialRequiereCantidad ? 'bg-[#1c355e]' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                          nuevoMaterialRequiereCantidad ? 'translate-x-4' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </label>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMostrarNuevoMaterial(false);
+                      setNuevoMaterialNombre('');
+                      setNuevoMaterialRequiereCantidad(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={guardandoMaterial}
+                    onClick={handleGuardarNuevoMaterial}
+                    className="px-3 py-1.5 rounded-lg bg-[#1c355e] hover:bg-[#152847] text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    {guardandoMaterial ? 'Guardando...' : 'Guardar material'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <p className="text-[11px] text-slate-500 font-medium pt-1">
+              Resumen: {textoResumenMateriales}
+            </p>
           </div>
 
           {/* SECCIÓN RECORDATORIOS */}

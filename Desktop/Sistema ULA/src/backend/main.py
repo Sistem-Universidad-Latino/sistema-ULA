@@ -252,6 +252,13 @@ def migrar_columnas_verificacion():
                     fecha DATETIME DEFAULT NOW(),
                     INDEX idx_evento (evento_id)
                 )""",
+                """CREATE TABLE IF NOT EXISTS eventos_aulas_recursos (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    evento_id INT NOT NULL,
+                    recurso_id INT NOT NULL,
+                    cantidad INT NOT NULL DEFAULT 1,
+                    INDEX idx_evento_recurso (evento_id, recurso_id)
+                )""",
                 """CREATE TABLE IF NOT EXISTS usuarios_pendientes (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     nombre VARCHAR(150) NOT NULL,
@@ -8237,6 +8244,11 @@ class RecordatorioSchema(BaseModel):
     antencion_unidad: str = "minutos"
 
 
+class EventoRecursoSchema(BaseModel):
+    recurso_id: int
+    cantidad: int = 1
+
+
 class EventoCreateSchema(BaseModel):
     tipo_evento: str
     nombre_evento: str
@@ -8249,6 +8261,7 @@ class EventoCreateSchema(BaseModel):
     descripcion: Optional[str] = ""
     usuario_creador: Optional[str] = "Prefectura"
     recordatorios: Optional[List[RecordatorioSchema]] = []
+    recursos: Optional[List[EventoRecursoSchema]] = []
 
 
 class EventoUpdateSchema(BaseModel):
@@ -8263,6 +8276,7 @@ class EventoUpdateSchema(BaseModel):
     descripcion: Optional[str] = None
     usuario_modificador: Optional[str] = "Prefectura"
     recordatorios: Optional[List[RecordatorioSchema]] = None
+    recursos: Optional[List[EventoRecursoSchema]] = None
 
 
 class EventoCancelarSchema(BaseModel):
@@ -8470,6 +8484,13 @@ def api_crear_evento(data: EventoCreateSchema):
                         INSERT INTO eventos_recordatorios (evento_id, tipo, antencion_valor, antencion_unidad, fecha_programada, estado)
                         VALUES (%s, %s, %s, %s, %s, 'pendiente')
                     """, (evento_id, rec.tipo, rec.antencion_valor, rec.antencion_unidad, f_prog.strftime("%Y-%m-%d %H:%M:%S")))
+
+            if data.recursos:
+                for mat in data.recursos:
+                    cursor.execute("""
+                        INSERT INTO eventos_aulas_recursos (evento_id, recurso_id, cantidad)
+                        VALUES (%s, %s, %s)
+                    """, (evento_id, mat.recurso_id, max(1, int(mat.cantidad or 1))))
 
             cursor.execute("""
                 INSERT INTO eventos_historial (evento_id, usuario, accion, detalles)
@@ -9111,6 +9132,18 @@ def api_obtener_evento(evento_id: int):
                 h["fecha"] = str(h["fecha"]) if h.get("fecha") else None
             ev["historial"] = hists
 
+            try:
+                cursor.execute("""
+                    SELECT ear.recurso_id, ear.cantidad, rrc.nombre, rrc.unidad
+                    FROM eventos_aulas_recursos ear
+                    JOIN reservas_recursos_catalogo rrc ON ear.recurso_id = rrc.id
+                    WHERE ear.evento_id = %s
+                    ORDER BY ear.id ASC
+                """, (evento_id,))
+                ev["recursos"] = cursor.fetchall() or []
+            except Exception:
+                ev["recursos"] = []
+
             return ev
     finally:
         connection.close()
@@ -9186,6 +9219,14 @@ def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
                         VALUES (%s, %s, %s, %s, %s, 'pendiente')
                     """, (evento_id, rec.tipo, rec.antencion_valor, rec.antencion_unidad, f_prog.strftime("%Y-%m-%d %H:%M:%S")))
 
+            if data.recursos is not None:
+                cursor.execute("DELETE FROM eventos_aulas_recursos WHERE evento_id = %s", (evento_id,))
+                for mat in data.recursos:
+                    cursor.execute("""
+                        INSERT INTO eventos_aulas_recursos (evento_id, recurso_id, cantidad)
+                        VALUES (%s, %s, %s)
+                    """, (evento_id, mat.recurso_id, max(1, int(mat.cantidad or 1))))
+
             detalle_auditoria = "; ".join(cambios) if cambios else "Actualización general de datos de reserva."
             cursor.execute("""
                 INSERT INTO eventos_historial (evento_id, usuario, accion, detalles)
@@ -9243,6 +9284,10 @@ def api_eliminar_evento(evento_id: int):
 
             cursor.execute("DELETE FROM eventos_recordatorios WHERE evento_id = %s", (evento_id,))
             cursor.execute("DELETE FROM eventos_historial WHERE evento_id = %s", (evento_id,))
+            try:
+                cursor.execute("DELETE FROM eventos_aulas_recursos WHERE evento_id = %s", (evento_id,))
+            except Exception:
+                pass
             cursor.execute("DELETE FROM eventos_aulas WHERE id = %s", (evento_id,))
 
             connection.commit()
@@ -11132,6 +11177,131 @@ def eliminar_usuario_reservas_bd(google_sub: str, admin_correo: str):
     except pymysql.Error as e:
         connection.rollback()
         raise HTTPException(status_code=500, detail=f"Error al eliminar usuario de SIPREF Reservas: {str(e)}")
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------
+# CATÁLOGO COMPARTIDO DE MATERIALES Y EQUIPO (reservas_recursos_catalogo)
+# ---------------------------------------------------------
+class RecursoCatalogoCreateSchema(BaseModel):
+    nombre: str
+    unidad: str = "pieza"
+
+
+@app.get("/api/recursos")
+def listar_recursos_catalogo():
+    """Lista los materiales y equipo activos desde la tabla compartida reservas_recursos_catalogo."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, nombre, unidad, es_predefinido
+                FROM reservas_recursos_catalogo
+                WHERE activo = TRUE
+                ORDER BY es_predefinido DESC, nombre ASC
+            """)
+            filas = cursor.fetchall() or []
+
+        return [
+            {
+                "id": r["id"],
+                "nombre": r["nombre"],
+                "unidad": r.get("unidad") or "pieza",
+                "es_predefinido": bool(r.get("es_predefinido", False)),
+            }
+            for r in filas
+        ]
+    except pymysql.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar el catálogo de materiales: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.post("/api/recursos")
+def crear_o_reactivar_recurso_catalogo(req: RecursoCatalogoCreateSchema, request: Request):
+    """Crea o reactiva un material en el catálogo compartido reservas_recursos_catalogo."""
+    nombre_limpio = (req.nombre or "").strip()
+    if not nombre_limpio:
+        raise HTTPException(status_code=400, detail="El nombre del material es obligatorio.")
+
+    unidad_limpia = (req.unidad or "pieza").strip()
+    if unidad_limpia not in ("pieza", "sin_cantidad"):
+        unidad_limpia = "pieza"
+
+    usuario_actual = obtener_usuario(request) or "Prefectura"
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, nombre, unidad, es_predefinido FROM reservas_recursos_catalogo WHERE LOWER(nombre) = LOWER(%s) LIMIT 1",
+                (nombre_limpio,),
+            )
+            existente = cursor.fetchone()
+            if existente:
+                cursor.execute(
+                    "UPDATE reservas_recursos_catalogo SET activo = TRUE, unidad = %s WHERE id = %s",
+                    (unidad_limpia, existente["id"]),
+                )
+                recurso_id = existente["id"]
+                es_pred = bool(existente.get("es_predefinido", False))
+                nombre_final = existente["nombre"]
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO reservas_recursos_catalogo (nombre, unidad, activo, es_predefinido, creado_por)
+                    VALUES (%s, %s, TRUE, FALSE, %s)
+                    """,
+                    (nombre_limpio, unidad_limpia, usuario_actual),
+                )
+                recurso_id = cursor.lastrowid
+                es_pred = False
+                nombre_final = nombre_limpio
+
+        connection.commit()
+        return {
+            "id": recurso_id,
+            "nombre": nombre_final,
+            "unidad": unidad_limpia,
+            "es_predefinido": es_pred,
+        }
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al guardar el material en el catálogo: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.delete("/api/recursos/{recurso_id}")
+def eliminar_recurso_catalogo(recurso_id: int):
+    """Realiza baja lógica (activo = FALSE) de un material agregado por el usuario."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, nombre, es_predefinido FROM reservas_recursos_catalogo WHERE id = %s",
+                (recurso_id,),
+            )
+            rec = cursor.fetchone()
+            if not rec:
+                raise HTTPException(status_code=404, detail="Material no encontrado en el catálogo.")
+            if rec.get("es_predefinido"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se pueden eliminar materiales predefinidos del catálogo.",
+                )
+
+            cursor.execute("UPDATE reservas_recursos_catalogo SET activo = FALSE WHERE id = %s", (recurso_id,))
+
+        connection.commit()
+        return {"success": True, "id": recurso_id, "message": "Material eliminado del catálogo."}
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al eliminar el material del catálogo: {str(e)}")
     finally:
         connection.close()
 
