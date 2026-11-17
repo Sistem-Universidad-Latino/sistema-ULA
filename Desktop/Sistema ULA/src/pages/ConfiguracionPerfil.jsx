@@ -48,6 +48,8 @@ export default function ConfiguracionPerfil() {
 
   // ── Panel lateral de usuarios ──────────────────────────────────────────────
   const [usuarios, setUsuarios] = useState([]);
+  const [usuariosReservas, setUsuariosReservas] = useState([]);
+  const [fotosReservasFallidas, setFotosReservasFallidas] = useState({});
 
   // Determinamos si es admin buscando su correo en la lista fresca de usuarios o en el contexto
   const correoActual = (usuarios.find(u => u.id === usuario.id)?.correo || usuario?.correo || '')?.trim().toLowerCase();
@@ -68,6 +70,11 @@ export default function ConfiguracionPerfil() {
       fetch('/api/usuarios')
         .then(r => r.ok ? r.json() : [])
         .then(data => setUsuarios(Array.isArray(data) ? data : []))
+        .catch(() => { });
+
+      fetch('/api/reservas/usuarios')
+        .then(r => r.ok ? r.json() : [])
+        .then(data => setUsuariosReservas(Array.isArray(data) ? data : []))
         .catch(() => { });
     };
 
@@ -469,6 +476,99 @@ export default function ConfiguracionPerfil() {
                   <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-lg">
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
                     {totalEnLinea} en línea
+                  </span>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* ── PANEL USUARIOS DE SIPREF RESERVAS ────────────────────────────── */}
+          <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col">
+            <div className="px-6 py-5 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-[14px] bg-[#1c355e]/10 border border-[#1c355e]/20 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[#1c355e] text-[20px]">event_available</span>
+                </div>
+                <div>
+                  <h2 className="text-base font-black text-[#1b1c1e] tracking-tight">Usuarios · SIPREF Reservas</h2>
+                  <p className="text-xs text-[#75777f] font-medium mt-0.5">Registrados en el módulo de reservas</p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-[#1c355e]/8 text-[#1c355e] border border-[#1c355e]/15">
+                {usuariosReservas.length}
+              </span>
+            </div>
+
+            <div className="overflow-y-auto divide-y divide-[#f0f0f4]" style={{ maxHeight: '320px' }}>
+              {usuariosReservas.length === 0 ? (
+                <div className="py-10 text-center">
+                  <span className="material-symbols-outlined text-3xl text-[#c5c6cf] block mb-2">event_available</span>
+                  <p className="text-xs font-semibold text-[#75777f]">Sin usuarios registrados en SIPREF Reservas</p>
+                </div>
+              ) : (
+                usuariosReservas.map((ur) => {
+                  const estadoUpper = String(ur.estado || 'PENDIENTE').toUpperCase();
+                  const esActivo = estadoUpper === 'ACTIVO';
+                  const esPendiente = estadoUpper === 'PENDIENTE' || estadoUpper === 'PENDIENTE_APROBACION';
+                  const mostrarFoto = ur.foto_url && !fotosReservasFallidas[ur.id];
+                  const inicial = (ur.nombre || ur.correo || 'U').trim().charAt(0).toUpperCase();
+                  const badgeClase = esActivo
+                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    : esPendiente
+                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                    : 'bg-red-50 text-red-600 border border-red-200';
+                  const dotClase = esActivo ? 'bg-green-500' : esPendiente ? 'bg-amber-500' : 'bg-red-500';
+                  const etiquetaEstado = esActivo ? 'Activo' : esPendiente ? 'Pendiente' : 'Suspendido';
+
+                  return (
+                    <div key={ur.id} className="px-5 py-3 flex items-center gap-3 transition-colors hover:bg-[#faf9fc]">
+                      <div className="relative flex-shrink-0">
+                        {mostrarFoto ? (
+                          <img
+                            src={ur.foto_url}
+                            alt={ur.nombre || 'Usuario'}
+                            referrerPolicy="no-referrer"
+                            onError={() => setFotosReservasFallidas((prev) => ({ ...prev, [ur.id]: true }))}
+                            className="w-9 h-9 rounded-xl object-cover border border-[#c5c6cf]/40"
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded-xl bg-[#f4f3f6] text-[#44464e] flex items-center justify-center font-black text-sm">
+                            {inicial}
+                          </div>
+                        )}
+                        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${dotClase}`} />
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-[#1b1c1e] truncate">{ur.nombre || 'Usuario'}</p>
+                        <p className="text-[10px] text-[#75777f] truncate">{ur.correo}</p>
+                      </div>
+
+                      <div className="flex-shrink-0 text-right space-y-1">
+                        <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${badgeClase}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${dotClase}`} />
+                          {etiquetaEstado}
+                        </span>
+                        <p className="text-[9px] text-[#75777f] font-medium">
+                          {ur.ultimo_acceso_en ? fmtFechaHora(ur.ultimo_acceso_en) : fmtFecha(ur.creado_en)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex items-center justify-between">
+              <p className="text-xs text-[#75777f] font-bold">
+                {usuariosReservas.length} usuario{usuariosReservas.length !== 1 ? 's' : ''} en Reservas
+              </p>
+              {(() => {
+                const activos = usuariosReservas.filter((u) => String(u.estado || '').toUpperCase() === 'ACTIVO').length;
+                return (
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-lg">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                    {activos} activo{activos !== 1 ? 's' : ''}
                   </span>
                 );
               })()}

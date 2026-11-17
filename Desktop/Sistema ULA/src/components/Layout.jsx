@@ -23,7 +23,6 @@ export default function Layout() {
   // Estados para solicitudes de acceso de SIPREF Reservas
   const [solicitudesAcceso, setSolicitudesAcceso] = useState([]);
   const [totalSolicitudesAcceso, setTotalSolicitudesAcceso] = useState(0);
-  const [rolesSeleccionados, setRolesSeleccionados] = useState({});
   const [fotosFallidas, setFotosFallidas] = useState({});
 
   // Estado académico
@@ -268,15 +267,6 @@ export default function Layout() {
       setSolicitudesAcceso(lista);
       const totalApi = typeof data?.total === 'number' ? data.total : lista.length;
       setTotalSolicitudesAcceso(Math.max(totalApi, lista.length));
-      setRolesSeleccionados((prev) => {
-        const next = { ...prev };
-        lista.forEach((s) => {
-          if (s?.id && !next[s.id]) {
-            next[s.id] = 'DOCENTE';
-          }
-        });
-        return next;
-      });
     } catch (error) {
       console.error('Error cargando solicitudes de acceso SIPREF Reservas:', error);
     }
@@ -314,7 +304,6 @@ export default function Layout() {
 
   const manejarAccionSolicitud = async (sol, accion) => {
     const solId = sol.id;
-    const rolElegido = rolesSeleccionados[solId] || 'DOCENTE';
 
     // Eliminar de la lista al instante
     setSolicitudesAcceso((prev) => prev.filter((item) => item.id !== solId));
@@ -329,7 +318,7 @@ export default function Layout() {
     const bodyPayload =
       accion === 'aprobar'
         ? {
-            rol: rolElegido,
+            rol: 'DOCENTE',
             admin_id: String(usuario?.id || usuario?.correo || 'admin'),
             admin_nombre: usuario?.nombre || 'Administrador',
           }
@@ -377,20 +366,13 @@ export default function Layout() {
         return;
       }
 
-      const etiquetaRol =
-        rolElegido === 'ADMIN_ESPACIOS'
-          ? 'Admin. de espacios'
-          : rolElegido === 'PERSONAL'
-          ? 'Personal'
-          : 'Docente';
-
       Swal.fire({
         toast: true,
         position: 'top-end',
         icon: 'success',
         title:
           accion === 'aprobar'
-            ? `Acceso permitido a ${sol.nombre || sol.correo} (${etiquetaRol})`
+            ? `Acceso permitido a ${sol.nombre || sol.correo}`
             : `Solicitud de ${sol.nombre || sol.correo} rechazada`,
         showConfirmButton: false,
         timer: 3500,
@@ -666,7 +648,6 @@ export default function Layout() {
                       const mostrarFoto = fotoUrl && !fotosFallidas[sol.id];
                       const inicial = (sol.nombre || sol.correo || 'U').trim().charAt(0).toUpperCase();
                       const fechaIntento = formatearFechaIntento(sol);
-                      const rolActual = rolesSeleccionados[sol.id] || 'DOCENTE';
 
                       return (
                         <div
@@ -710,49 +691,23 @@ export default function Layout() {
                             </div>
                           </div>
 
-                          <div className="mt-2.5 flex flex-col gap-2">
-                            <div className="flex items-center gap-2">
-                              <label
-                                htmlFor={`rol-select-${sol.id}`}
-                                className="text-[11px] font-semibold text-slate-600 shrink-0"
-                              >
-                                Rol:
-                              </label>
-                              <select
-                                id={`rol-select-${sol.id}`}
-                                value={rolActual}
-                                onChange={(e) =>
-                                  setRolesSeleccionados((prev) => ({
-                                    ...prev,
-                                    [sol.id]: e.target.value,
-                                  }))
-                                }
-                                className="flex-1 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#1c355e]/20 focus:border-[#1c355e]"
-                              >
-                                <option value="DOCENTE">Docente</option>
-                                <option value="PERSONAL">Personal</option>
-                                <option value="ADMIN_ESPACIOS">Admin. de espacios</option>
-                              </select>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => manejarAccionSolicitud(sol, 'aprobar')}
-                                className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-sm flex items-center justify-center gap-1"
-                              >
-                                <span className="material-symbols-outlined text-[15px]">check_circle</span>
-                                Permitir
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => manejarAccionSolicitud(sol, 'rechazar')}
-                                className="flex-1 py-1.5 px-3 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs transition-colors flex items-center justify-center gap-1"
-                              >
-                                <span className="material-symbols-outlined text-[15px]">cancel</span>
-                                Rechazar
-                              </button>
-                            </div>
+                          <div className="mt-2.5 flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => manejarAccionSolicitud(sol, 'aprobar')}
+                              className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors shadow-sm flex items-center justify-center gap-1"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">check_circle</span>
+                              Permitir
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => manejarAccionSolicitud(sol, 'rechazar')}
+                              className="flex-1 py-1.5 px-3 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 font-bold text-xs transition-colors flex items-center justify-center gap-1"
+                            >
+                              <span className="material-symbols-outlined text-[15px]">cancel</span>
+                              Rechazar
+                            </button>
                           </div>
                         </div>
                       );

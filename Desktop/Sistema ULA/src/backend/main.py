@@ -8394,6 +8394,27 @@ def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, 
         except Exception:
             pass
 
+    # 4. Reservaciones en SIPREF Reservas (`reservas_reservaciones`)
+    try:
+        nueva_fecha_inicio = dt_event_ini.strftime("%Y-%m-%d %H:%M:%S")
+        nueva_fecha_fin = dt_event_fin.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            SELECT codigo, nombre_evento, responsable, inicio, fin
+            FROM reservas_reservaciones
+            WHERE (espacio_id = %s OR espacio_nombre = %s)
+              AND estado = 'PROGRAMADA'
+              AND (%s < fin AND %s > inicio)
+            LIMIT 1
+        """, (aula_nombre, aula_nombre, nueva_fecha_inicio, nueva_fecha_fin))
+        reserva_conflicto = cursor.fetchone()
+        if reserva_conflicto:
+            return (
+                False,
+                f"El espacio ya está reservado en SIPREF Reservas para {reserva_conflicto['nombre_evento']} por {reserva_conflicto['responsable']}.",
+            )
+    except Exception as e_res:
+        print(f"Advertencia al verificar colisión en reservas_reservaciones: {e_res}")
+
     return True, "Aula disponible."
 
 
@@ -10583,8 +10604,18 @@ def _llamar_sipref_reservas(metodo: str, ruta_con_query: str, payload: Optional[
 
 @app.get("/api/reservas-acceso/pendientes")
 def obtener_solicitudes_acceso_pendientes():
-    """Consulta las solicitudes de acceso en estado PENDIENTE desde SIPREF Reservas."""
-    return _llamar_sipref_reservas("GET", "/solicitudes?estado=PENDIENTE&tamano=20")
+    """Consulta las solicitudes de acceso en estado PENDIENTE desde SIPREF Reservas (o directamente en TiDB si no está disponible)."""
+    try:
+        return _llamar_sipref_reservas("GET", "/solicitudes?estado=PENDIENTE&tamano=20")
+    except HTTPException as e:
+        if e.status_code == 502:
+            res_bd = listar_solicitudes_pendientes_reservas_bd()
+            return {
+                "datos": res_bd["solicitudes"],
+                "total": res_bd["total"],
+                "fuente": "tidb_fallback",
+            }
+        raise
 
 
 @app.post("/api/reservas-acceso/{solicitud_id}/aprobar")
@@ -10614,7 +10645,21 @@ def aprobar_solicitud_acceso_reservas(
     if req.motivo is not None and str(req.motivo).strip() != "":
         payload_reservas["motivo"] = str(req.motivo).strip()
 
-    respuesta = _llamar_sipref_reservas("POST", f"/solicitudes/{solicitud_id}/aprobar", payload_reservas)
+    try:
+        respuesta = _llamar_sipref_reservas("POST", f"/solicitudes/{solicitud_id}/aprobar", payload_reservas)
+    except HTTPException as e:
+        if e.status_code == 502:
+            return aprobar_solicitud_reservas_bd(
+                solicitud_id=solicitud_id,
+                req=AprobarReservasDirectoRequest(
+                    rol=rol_limpio,
+                    motivo=req.motivo,
+                    admin_id=admin_id_str,
+                    admin_nombre=admin_nombre_str,
+                ),
+                request=request,
+            )
+        raise
 
     # Registrar en bitacora_cambios de SIPREF
     try:
@@ -10689,7 +10734,20 @@ def rechazar_solicitud_acceso_reservas(
     if req.motivo is not None and str(req.motivo).strip() != "":
         payload_reservas["motivo"] = str(req.motivo).strip()
 
-    respuesta = _llamar_sipref_reservas("POST", f"/solicitudes/{solicitud_id}/rechazar", payload_reservas)
+    try:
+        respuesta = _llamar_sipref_reservas("POST", f"/solicitudes/{solicitud_id}/rechazar", payload_reservas)
+    except HTTPException as e:
+        if e.status_code == 502:
+            return rechazar_solicitud_reservas_bd(
+                solicitud_id=solicitud_id,
+                req=RechazarReservasDirectoRequest(
+                    motivo=req.motivo,
+                    admin_id=admin_id_str,
+                    admin_nombre=admin_nombre_str,
+                ),
+                request=request,
+            )
+        raise
 
     # Registrar en bitacora_cambios de SIPREF
     try:
@@ -10742,5 +10800,286 @@ def rechazar_solicitud_acceso_reservas(
         print(f"Advertencia: no se pudo registrar en bitacora_cambios el rechazo de {solicitud_id}: {e}")
 
     return respuesta
+
+
+# ---------------------------------------------------------
+# GESTIÓN DIRECTA EN BD COMPARTIDA: SIPREF RESERVAS
+# ---------------------------------------------------------
+class AprobarReservasDirectoRequest(BaseModel):
+    rol: str = "DOCENTE"
+    motivo: Optional[str] = None
+    admin_id: Optional[Union[str, int]] = None
+    admin_nombre: Optional[str] = None
+
+
+class RechazarReservasDirectoRequest(BaseModel):
+    motivo: Optional[str] = ""
+    admin_id: Optional[Union[str, int]] = None
+    admin_nombre: Optional[str] = None
+
+
+@app.get("/api/reservas/solicitudes-pendientes")
+def listar_solicitudes_pendientes_reservas_bd():
+    """Consulta directamente en TiDB las solicitudes de acceso pendientes de SIPREF Reservas."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    id,
+                    google_sub,
+                    correo,
+                    nombre,
+                    foto_url,
+                    estado,
+                    rol_asignado,
+                    intentado_en,
+                    ultimo_intento_en,
+                    intentos,
+                    expira_en
+                FROM reservas_solicitudes_acceso
+                WHERE estado = 'PENDIENTE'
+                  AND expira_en > NOW()
+                ORDER BY ultimo_intento_en DESC, intentado_en DESC
+            """)
+            filas = cursor.fetchall() or []
+
+            solicitudes = []
+            for r in filas:
+                created_iso = r["ultimo_intento_en"].isoformat() if r.get("ultimo_intento_en") else (r["intentado_en"].isoformat() if r.get("intentado_en") else None)
+                expira_iso = r["expira_en"].isoformat() if r.get("expira_en") else None
+                solicitudes.append({
+                    "id": r["id"],
+                    "google_sub": r["google_sub"],
+                    "usuario_id": r["google_sub"],
+                    "correo": r["correo"],
+                    "email": r["correo"],
+                    "nombre": r["nombre"],
+                    "nombre_completo": r["nombre"],
+                    "foto_url": r.get("foto_url"),
+                    "avatar_url": r.get("foto_url"),
+                    "estado": r["estado"],
+                    "rol_asignado": r.get("rol_asignado"),
+                    "intentos": r.get("intentos", 1),
+                    "intentado_en": r["intentado_en"].isoformat() if r.get("intentado_en") else None,
+                    "ultimo_intento_en": r["ultimo_intento_en"].isoformat() if r.get("ultimo_intento_en") else None,
+                    "created_at": created_iso,
+                    "expira_en": expira_iso,
+                })
+
+            return {
+                "solicitudes": solicitudes,
+                "total": len(solicitudes),
+                "conteo": len(solicitudes),
+            }
+    finally:
+        connection.close()
+
+
+@app.post("/api/reservas/solicitudes/{solicitud_id}/aprobar")
+def aprobar_solicitud_reservas_bd(
+    solicitud_id: str,
+    req: AprobarReservasDirectoRequest,
+    request: Request,
+):
+    """Aprueba una solicitud de acceso directamente en TiDB y activa al usuario en reservas_usuarios."""
+    rol_limpio = (req.rol or "DOCENTE").strip().upper()
+    if rol_limpio not in ROLES_RESERVAS_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rol inválido '{req.rol}'. Roles válidos: {', '.join(sorted(ROLES_RESERVAS_VALIDOS))}",
+        )
+
+    admin_nombre_str = (req.admin_nombre or obtener_usuario(request) or "Administrador").strip()
+    admin_id_str = str(req.admin_id).strip() if req.admin_id is not None and str(req.admin_id).strip() != "" else admin_nombre_str
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, google_sub, correo, nombre, estado FROM reservas_solicitudes_acceso WHERE id = %s",
+                (solicitud_id,),
+            )
+            sol = cursor.fetchone()
+            if not sol:
+                raise HTTPException(status_code=404, detail="Solicitud de acceso no encontrada.")
+            if sol["estado"] != "PENDIENTE":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"La solicitud ya fue atendida (estado actual: {sol['estado']}).",
+                )
+
+            cursor.execute("""
+                UPDATE reservas_solicitudes_acceso
+                SET estado = 'APROBADA',
+                    rol_asignado = %s,
+                    resuelto_por_id = %s,
+                    resuelto_por_nombre = %s,
+                    resuelto_en = NOW(),
+                    motivo = COALESCE(%s, motivo)
+                WHERE id = %s
+            """, (rol_limpio, admin_id_str, admin_nombre_str, req.motivo, solicitud_id))
+
+            cursor.execute("""
+                UPDATE reservas_usuarios
+                SET rol = %s,
+                    estado = 'ACTIVO',
+                    actualizado_en = NOW()
+                WHERE google_sub = %s OR correo = %s
+            """, (rol_limpio, sol["google_sub"], sol["correo"]))
+
+            docente_ref = f"{sol['nombre']} ({sol['correo']})" if sol.get("nombre") and sol.get("correo") else (sol.get("nombre") or sol.get("correo"))
+            registrar_bitacora(
+                cursor=cursor,
+                usuario=admin_nombre_str,
+                tipo_operacion="aprobar_solicitud_reservas",
+                modulo_afectado="reservas_acceso",
+                docente=docente_ref,
+                estado_anterior="PENDIENTE",
+                estado_nuevo=f"APROBADA ({rol_limpio})",
+                motivo=req.motivo or f"Solicitud {solicitud_id} aprobada con rol {rol_limpio}",
+                datos_anteriores={"solicitud_id": solicitud_id, "estado": "PENDIENTE"},
+                datos_nuevos={"solicitud_id": solicitud_id, "estado": "APROBADA", "rol": rol_limpio},
+            )
+
+        connection.commit()
+        return {
+            "success": True,
+            "id": solicitud_id,
+            "estado": "APROBADA",
+            "rol": rol_limpio,
+            "message": f"Acceso aprobado para {sol.get('nombre') or sol.get('correo')} como {rol_limpio}.",
+        }
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al aprobar solicitud en BD: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.post("/api/reservas/solicitudes/{solicitud_id}/rechazar")
+def rechazar_solicitud_reservas_bd(
+    solicitud_id: str,
+    req: RechazarReservasDirectoRequest,
+    request: Request,
+):
+    """Rechaza una solicitud de acceso directamente en TiDB y suspende al usuario en reservas_usuarios."""
+    admin_nombre_str = (req.admin_nombre or obtener_usuario(request) or "Administrador").strip()
+    admin_id_str = str(req.admin_id).strip() if req.admin_id is not None and str(req.admin_id).strip() != "" else admin_nombre_str
+    motivo_str = (req.motivo or "").strip() or None
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, google_sub, correo, nombre, estado FROM reservas_solicitudes_acceso WHERE id = %s",
+                (solicitud_id,),
+            )
+            sol = cursor.fetchone()
+            if not sol:
+                raise HTTPException(status_code=404, detail="Solicitud de acceso no encontrada.")
+            if sol["estado"] != "PENDIENTE":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"La solicitud ya fue atendida (estado actual: {sol['estado']}).",
+                )
+
+            cursor.execute("""
+                UPDATE reservas_solicitudes_acceso
+                SET estado = 'RECHAZADA',
+                    motivo = %s,
+                    resuelto_por_id = %s,
+                    resuelto_por_nombre = %s,
+                    resuelto_en = NOW()
+                WHERE id = %s
+            """, (motivo_str, admin_id_str, admin_nombre_str, solicitud_id))
+
+            cursor.execute("""
+                UPDATE reservas_usuarios
+                SET estado = 'SUSPENDIDO',
+                    actualizado_en = NOW()
+                WHERE google_sub = %s OR correo = %s
+            """, (sol["google_sub"], sol["correo"]))
+
+            docente_ref = f"{sol['nombre']} ({sol['correo']})" if sol.get("nombre") and sol.get("correo") else (sol.get("nombre") or sol.get("correo"))
+            registrar_bitacora(
+                cursor=cursor,
+                usuario=admin_nombre_str,
+                tipo_operacion="rechazar_solicitud_reservas",
+                modulo_afectado="reservas_acceso",
+                docente=docente_ref,
+                estado_anterior="PENDIENTE",
+                estado_nuevo="RECHAZADA",
+                motivo=motivo_str or f"Solicitud {solicitud_id} rechazada",
+                datos_anteriores={"solicitud_id": solicitud_id, "estado": "PENDIENTE"},
+                datos_nuevos={"solicitud_id": solicitud_id, "estado": "RECHAZADA", "motivo": motivo_str},
+            )
+
+        connection.commit()
+        return {
+            "success": True,
+            "id": solicitud_id,
+            "estado": "RECHAZADA",
+            "message": f"Solicitud de {sol.get('nombre') or sol.get('correo')} rechazada.",
+        }
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al rechazar solicitud en BD: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.get("/api/reservas/usuarios")
+def listar_usuarios_reservas_bd():
+    """Lista los usuarios registrados en SIPREF Reservas desde la tabla compartida reservas_usuarios."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    google_sub,
+                    correo,
+                    nombre,
+                    foto_url,
+                    estado,
+                    creado_en,
+                    actualizado_en,
+                    ultimo_acceso_en
+                FROM reservas_usuarios
+                ORDER BY
+                    CASE estado
+                        WHEN 'ACTIVO' THEN 1
+                        WHEN 'PENDIENTE' THEN 2
+                        ELSE 3
+                    END,
+                    ultimo_acceso_en DESC,
+                    nombre ASC
+            """)
+            filas = cursor.fetchall() or []
+
+        resultado = []
+        for u in filas:
+            resultado.append({
+                "id": u["google_sub"],
+                "google_sub": u["google_sub"],
+                "correo": u["correo"],
+                "nombre": u["nombre"],
+                "foto_url": u.get("foto_url"),
+                "estado": u.get("estado") or "PENDIENTE",
+                "creado_en": u["creado_en"].isoformat() if u.get("creado_en") else None,
+                "actualizado_en": u["actualizado_en"].isoformat() if u.get("actualizado_en") else None,
+                "ultimo_acceso_en": u["ultimo_acceso_en"].isoformat() if u.get("ultimo_acceso_en") else None,
+            })
+        return resultado
+    except pymysql.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar usuarios de SIPREF Reservas: {str(e)}")
+    finally:
+        connection.close()
 
 
