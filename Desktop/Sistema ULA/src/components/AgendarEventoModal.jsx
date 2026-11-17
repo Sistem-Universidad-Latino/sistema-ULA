@@ -43,6 +43,17 @@ export default function AgendarEventoModal({
   const [guardandoMaterial, setGuardandoMaterial] = useState(false);
   const [materialesDesplegados, setMaterialesDesplegados] = useState(false);
 
+  // Plantillas de evento compartidas (reservas_plantillas_evento)
+  const [plantillasEvento, setPlantillasEvento] = useState([]);
+  const [plantillaSeleccionadaId, setPlantillaSeleccionadaId] = useState('');
+  const [mostrarModalPlantilla, setMostrarModalPlantilla] = useState(false);
+  const [plantillaEnEdicion, setPlantillaEnEdicion] = useState(null);
+  const [plantillaFormNombre, setPlantillaFormNombre] = useState('');
+  const [plantillaFormTipo, setPlantillaFormTipo] = useState('');
+  const [plantillaFormRecursos, setPlantillaFormRecursos] = useState({});
+  const [guardandoPlantilla, setGuardandoPlantilla] = useState(false);
+  const [eliminandoPlantilla, setEliminandoPlantilla] = useState(false);
+
   const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
   // Cargar aulas si no vienen en props
@@ -60,7 +71,7 @@ export default function AgendarEventoModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aulasList.length]);
 
-  // Cargar catálogo compartido de materiales y equipo cuando abre el modal
+  // Cargar catálogo compartido de materiales y plantillas de evento cuando abre el modal
   useEffect(() => {
     if (!isOpen) return;
     fetch(`${API_URL}/api/recursos`)
@@ -69,6 +80,13 @@ export default function AgendarEventoModal({
         if (Array.isArray(data)) setRecursosCatalogo(data);
       })
       .catch(err => console.error('Error al cargar catálogo de materiales:', err));
+
+    fetch(`${API_URL}/api/plantillas-evento`)
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => {
+        if (Array.isArray(data)) setPlantillasEvento(data);
+      })
+      .catch(err => console.error('Error al cargar plantillas de evento:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
@@ -132,6 +150,9 @@ export default function AgendarEventoModal({
     setNuevoMaterialNombre('');
     setNuevoMaterialRequiereCantidad(true);
     setMaterialesDesplegados(Boolean(eventoAEditar?.recursos?.length));
+    setPlantillaSeleccionadaId('');
+    setMostrarModalPlantilla(false);
+    setPlantillaEnEdicion(null);
     setErrorDisponibilidad('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, eventoAEditar?.id]);
@@ -296,8 +317,8 @@ export default function AgendarEventoModal({
 
   const aulasDisponibles = aulasList.length > 0 ? aulasList : aulasInternas;
 
-  const alternarMaterial = (recursoId, marcado) => {
-    setRecursosSeleccionados(prev => {
+  const alternarRecursoEnMapa = (setter, recursoId, marcado) => {
+    setter(prev => {
       const next = { ...prev };
       if (marcado) {
         next[recursoId] = next[recursoId] || 1;
@@ -308,14 +329,214 @@ export default function AgendarEventoModal({
     });
   };
 
-  const cambiarCantidadMaterial = (recursoId, delta) => {
-    setRecursosSeleccionados(prev => {
+  const cambiarCantidadEnMapa = (setter, recursoId, delta) => {
+    setter(prev => {
       const actual = prev[recursoId] || 1;
       return {
         ...prev,
         [recursoId]: Math.max(1, actual + delta)
       };
     });
+  };
+
+  const aplicarPlantillaAlFormulario = (plantilla, mostrarToast = true) => {
+    if (!plantilla) return;
+    setFormData(prev => ({
+      ...prev,
+      nombre_evento: plantilla.nombre,
+      tipo_evento: plantilla.tipoEvento || plantilla.tipo_evento || plantilla.nombre
+    }));
+    const mapa = {};
+    (plantilla.recursos || []).forEach(r => {
+      const rid = r.recurso_id ?? r.id;
+      if (rid) mapa[rid] = Math.max(1, Number(r.cantidad) || 1);
+    });
+    setRecursosSeleccionados(mapa);
+    if (mostrarToast) {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: `Plantilla "${plantilla.nombre}" aplicada`,
+        showConfirmButton: false,
+        timer: 2500
+      });
+    }
+  };
+
+  const handleSeleccionarPlantilla = (e) => {
+    const idStr = e.target.value;
+    setPlantillaSeleccionadaId(idStr);
+    if (!idStr) return;
+    const plantilla = plantillasEvento.find(p => String(p.id) === String(idStr));
+    if (plantilla) {
+      aplicarPlantillaAlFormulario(plantilla, true);
+    }
+  };
+
+  const handleAbrirNuevaPlantilla = () => {
+    setPlantillaEnEdicion(null);
+    setPlantillaFormNombre('');
+    setPlantillaFormTipo('');
+    setPlantillaFormRecursos({ ...recursosSeleccionados });
+    setMostrarModalPlantilla(true);
+  };
+
+  const handleAbrirEditarPlantilla = () => {
+    const actual = plantillasEvento.find(p => String(p.id) === String(plantillaSeleccionadaId));
+    if (!actual) return;
+    setPlantillaEnEdicion(actual);
+    setPlantillaFormNombre(actual.nombre || '');
+    setPlantillaFormTipo(actual.tipoEvento || actual.tipo_evento || '');
+    const mapa = {};
+    (actual.recursos || []).forEach(r => {
+      const rid = r.recurso_id ?? r.id;
+      if (rid) mapa[rid] = Math.max(1, Number(r.cantidad) || 1);
+    });
+    setPlantillaFormRecursos(mapa);
+    setMostrarModalPlantilla(true);
+  };
+
+  const handleGuardarPlantilla = async () => {
+    const nombreLimpio = plantillaFormNombre.trim();
+    if (!nombreLimpio) {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'warning',
+        title: 'Escribe el nombre de la plantilla',
+        showConfirmButton: false,
+        timer: 2500
+      });
+      return;
+    }
+
+    setGuardandoPlantilla(true);
+    try {
+      const recursosPayload = Object.entries(plantillaFormRecursos).map(([idStr, cant]) => ({
+        recurso_id: Number(idStr),
+        cantidad: Math.max(1, Number(cant) || 1)
+      }));
+      const esEdicion = Boolean(plantillaEnEdicion?.id);
+      const url = esEdicion
+        ? `${API_URL}/api/plantillas-evento/${plantillaEnEdicion.id}`
+        : `${API_URL}/api/plantillas-evento`;
+
+      const res = await fetch(url, {
+        method: esEdicion ? 'PUT' : 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-usuario': encodeURIComponent(usuarioLogueado || 'Prefectura')
+        },
+        body: JSON.stringify({
+          nombre: nombreLimpio,
+          tipoEvento: plantillaFormTipo.trim() || null,
+          recursos: recursosPayload
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudo guardar la plantilla',
+          showConfirmButton: false,
+          timer: 3000
+        });
+        return;
+      }
+
+      setPlantillasEvento(prev => {
+        const filtradas = prev.filter(p => p.id !== data.id);
+        return [...filtradas, data].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+      });
+      setPlantillaSeleccionadaId(String(data.id));
+      aplicarPlantillaAlFormulario(data, false);
+      setMostrarModalPlantilla(false);
+      setPlantillaEnEdicion(null);
+
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: esEdicion ? 'Plantilla de evento actualizada' : 'Plantilla de evento creada',
+        showConfirmButton: false,
+        timer: 2800
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al guardar la plantilla',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    } finally {
+      setGuardandoPlantilla(false);
+    }
+  };
+
+  const handleEliminarPlantilla = async () => {
+    if (!plantillaEnEdicion?.id) return;
+    const confirm = await Swal.fire({
+      title: 'Eliminar plantilla',
+      text: `¿Eliminar la plantilla "${plantillaEnEdicion.nombre}"? Los eventos ya registrados conservarán su información.`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc2626',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: 'Sí, eliminar',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true
+    });
+    if (!confirm.isConfirmed) return;
+
+    setEliminandoPlantilla(true);
+    try {
+      const res = await fetch(`${API_URL}/api/plantillas-evento/${plantillaEnEdicion.id}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudo eliminar la plantilla',
+          showConfirmButton: false,
+          timer: 3000
+        });
+        return;
+      }
+
+      setPlantillasEvento(prev => prev.filter(p => p.id !== plantillaEnEdicion.id));
+      if (String(plantillaSeleccionadaId) === String(plantillaEnEdicion.id)) {
+        setPlantillaSeleccionadaId('');
+      }
+      setMostrarModalPlantilla(false);
+      setPlantillaEnEdicion(null);
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: 'Plantilla de evento eliminada',
+        showConfirmButton: false,
+        timer: 2500
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al eliminar la plantilla',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    } finally {
+      setEliminandoPlantilla(false);
+    }
   };
 
   const handleGuardarNuevoMaterial = async () => {
@@ -464,6 +685,82 @@ export default function AgendarEventoModal({
           .filter(Boolean)
           .join(', ');
 
+  const renderCuadriculaMateriales = (mapaSeleccionado, setter, permitirEliminarCatalogo = false) => (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+      {recursosCatalogo.map((rec) => {
+        const marcado = mapaSeleccionado[rec.id] !== undefined;
+        const cantidad = mapaSeleccionado[rec.id] || 1;
+        const requiereCantidad = rec.unidad !== 'sin_cantidad' && rec.unidad !== 'fijo';
+
+        return (
+          <div
+            key={rec.id}
+            className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
+              marcado
+                ? 'bg-white border-[#1c355e]/40 shadow-xs'
+                : 'bg-white border-slate-200 hover:border-slate-300'
+            }`}
+          >
+            <label className="flex items-center gap-2 font-semibold text-slate-700 cursor-pointer flex-1 min-w-0">
+              <input
+                type="checkbox"
+                checked={marcado}
+                onChange={(e) => alternarRecursoEnMapa(setter, rec.id, e.target.checked)}
+                className="rounded text-[#1c355e] focus:ring-[#1c355e]"
+              />
+              <span className="truncate">{rec.nombre}</span>
+              {rec.unidad === 'fijo' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                  Fijo en aula
+                </span>
+              )}
+            </label>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              {marcado && requiereCantidad && (
+                <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => cambiarCantidadEnMapa(setter, rec.id, -1)}
+                    className="px-2 py-1 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
+                    aria-label={`Disminuir ${rec.nombre}`}
+                  >
+                    −
+                  </button>
+                  <span className="px-2 py-1 font-extrabold text-[#1c355e] min-w-[24px] text-center">
+                    {cantidad}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => cambiarCantidadEnMapa(setter, rec.id, 1)}
+                    className="px-2 py-1 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
+                    aria-label={`Aumentar ${rec.nombre}`}
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+
+              {permitirEliminarCatalogo && !rec.es_predefinido && (
+                <button
+                  type="button"
+                  onClick={() => handleEliminarMaterial(rec)}
+                  className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                  title="Eliminar material del catálogo"
+                >
+                  <span className="material-symbols-outlined text-base">delete</span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const plantillaSeleccionadaActual = plantillasEvento.find(p => String(p.id) === String(plantillaSeleccionadaId)) || null;
+  const cantidadMaterialesPlantilla = Object.keys(plantillaFormRecursos).length;
+
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
       <div className="bg-white rounded-3xl p-6 sm:p-8 w-full max-w-2xl shadow-2xl border border-slate-100 my-8">
@@ -503,7 +800,51 @@ export default function AgendarEventoModal({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          
+
+          {/* BARRA RÁPIDA DE PLANTILLA DE EVENTO */}
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-[#1c355e]">
+                <span className="material-symbols-outlined text-lg">auto_awesome</span>
+                <span className="text-xs font-bold uppercase tracking-wider">Plantilla de Evento</span>
+              </div>
+              <span className="text-[11px] text-slate-400 font-semibold">Opcional</span>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <select
+                value={plantillaSeleccionadaId}
+                onChange={handleSeleccionarPlantilla}
+                className="flex-1 px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
+              >
+                <option value="">Evento personalizado (o elige una plantilla...)</option>
+                {plantillasEvento.map((p) => (
+                  <option key={p.id} value={String(p.id)}>
+                    {p.nombre} ({(p.recursos || []).length} materiales)
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleAbrirNuevaPlantilla}
+                  className="px-3 py-2 rounded-xl bg-[#1c355e] hover:bg-[#152847] text-white text-xs font-bold transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  + Nueva plantilla
+                </button>
+                {plantillaSeleccionadaActual && (
+                  <button
+                    type="button"
+                    onClick={handleAbrirEditarPlantilla}
+                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-[#1c355e] text-xs font-bold transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-sm">edit</span>
+                    Editar
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* DATOS PRINCIPALES */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             
@@ -700,76 +1041,7 @@ export default function AgendarEventoModal({
 
             {materialesDesplegados && (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {recursosCatalogo.map((rec) => {
-                const marcado = recursosSeleccionados[rec.id] !== undefined;
-                const cantidad = recursosSeleccionados[rec.id] || 1;
-                const requiereCantidad = rec.unidad !== 'sin_cantidad' && rec.unidad !== 'fijo';
-
-                return (
-                  <div
-                    key={rec.id}
-                    className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
-                      marcado
-                        ? 'bg-white border-[#1c355e]/40 shadow-xs'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    <label className="flex items-center gap-2 font-semibold text-slate-700 cursor-pointer flex-1 min-w-0">
-                      <input
-                        type="checkbox"
-                        checked={marcado}
-                        onChange={(e) => alternarMaterial(rec.id, e.target.checked)}
-                        className="rounded text-[#1c355e] focus:ring-[#1c355e]"
-                      />
-                      <span className="truncate">{rec.nombre}</span>
-                      {rec.unidad === 'fijo' && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
-                          Fijo en aula
-                        </span>
-                      )}
-                    </label>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {marcado && requiereCantidad && (
-                        <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
-                          <button
-                            type="button"
-                            onClick={() => cambiarCantidadMaterial(rec.id, -1)}
-                            className="px-2 py-1 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
-                            aria-label={`Disminuir ${rec.nombre}`}
-                          >
-                            −
-                          </button>
-                          <span className="px-2 py-1 font-extrabold text-[#1c355e] min-w-[24px] text-center">
-                            {cantidad}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => cambiarCantidadMaterial(rec.id, 1)}
-                            className="px-2 py-1 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
-                            aria-label={`Aumentar ${rec.nombre}`}
-                          >
-                            +
-                          </button>
-                        </div>
-                      )}
-
-                      {!rec.es_predefinido && (
-                        <button
-                          type="button"
-                          onClick={() => handleEliminarMaterial(rec)}
-                          className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
-                          title="Eliminar material del catálogo"
-                        >
-                          <span className="material-symbols-outlined text-base">delete</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                {renderCuadriculaMateriales(recursosSeleccionados, setRecursosSeleccionados, true)}
 
             {!mostrarNuevoMaterial ? (
               <div>
@@ -955,6 +1227,121 @@ export default function AgendarEventoModal({
 
         </form>
       </div>
+
+      {/* SUBMODAL CREAR / EDITAR PLANTILLA DE EVENTO */}
+      {mostrarModalPlantilla && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[60] p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-xl shadow-2xl border border-slate-100 my-8 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#1c355e]/10 text-[#1c355e] flex items-center justify-center">
+                  <span className="material-symbols-outlined text-xl">auto_awesome</span>
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-[#1c355e]">
+                    {plantillaEnEdicion ? 'Editar Plantilla de Evento' : 'Nueva Plantilla de Evento'}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    Guarda un conjunto de evento y materiales para reutilizarlo rápido
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMostrarModalPlantilla(false);
+                  setPlantillaEnEdicion(null);
+                }}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div>
+                <label className="block text-xs font-bold text-[#1c355e] uppercase tracking-wider mb-1.5">
+                  Nombre de la plantilla *
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej. Ceremonia de Titulación"
+                  value={plantillaFormNombre}
+                  onChange={(e) => setPlantillaFormNombre(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-[#1c355e] uppercase tracking-wider mb-1.5">
+                  Tipo de evento <span className="text-slate-400 font-normal">(Opcional)</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ej. Ceremonia, Conferencia..."
+                  value={plantillaFormTipo}
+                  onChange={(e) => setPlantillaFormTipo(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-[#1c355e]">
+                  <span className="material-symbols-outlined text-lg">inventory_2</span>
+                  <span className="text-xs font-bold uppercase tracking-wider">Materiales de la plantilla</span>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#fdbb11]/25 border border-[#fdbb11]/60 text-[#1c355e]">
+                  {cantidadMaterialesPlantilla} {cantidadMaterialesPlantilla === 1 ? 'seleccionado' : 'seleccionados'}
+                </span>
+              </div>
+              <div className="max-h-64 overflow-y-auto pr-1">
+                {renderCuadriculaMateriales(plantillaFormRecursos, setPlantillaFormRecursos, false)}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
+              <div>
+                {plantillaEnEdicion && (
+                  <button
+                    type="button"
+                    disabled={eliminandoPlantilla || guardandoPlantilla}
+                    onClick={handleEliminarPlantilla}
+                    className="px-3.5 py-2 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-base">delete</span>
+                    {eliminandoPlantilla ? 'Eliminando...' : 'Eliminar plantilla'}
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMostrarModalPlantilla(false);
+                    setPlantillaEnEdicion(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={guardandoPlantilla || eliminandoPlantilla}
+                  onClick={handleGuardarPlantilla}
+                  className="px-5 py-2 rounded-xl bg-[#1c355e] hover:bg-[#152847] text-white font-bold text-xs shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {guardandoPlantilla
+                    ? 'Guardando...'
+                    : plantillaEnEdicion
+                      ? 'Actualizar plantilla'
+                      : 'Guardar plantilla'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

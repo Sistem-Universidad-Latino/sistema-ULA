@@ -11565,3 +11565,239 @@ def eliminar_recurso_catalogo(recurso_id: int):
         connection.close()
 
 
+# ---------------------------------------------------------
+# PLANTILLAS DE EVENTO COMPARTIDAS (reservas_plantillas_evento)
+# ---------------------------------------------------------
+class PlantillaRecursoItemSchema(BaseModel):
+    recurso_id: int
+    cantidad: int = 1
+
+
+class PlantillaEventoSchema(BaseModel):
+    nombre: str
+    tipo_evento: Optional[str] = None
+    tipoEvento: Optional[str] = None
+    recursos: List[PlantillaRecursoItemSchema] = []
+
+
+def _construir_recursos_deduplicados(items: List[PlantillaRecursoItemSchema]) -> List[tuple]:
+    vistos: Dict[int, int] = {}
+    for item in items or []:
+        rid = int(item.recurso_id)
+        if rid <= 0:
+            continue
+        cant = max(1, int(item.cantidad or 1))
+        vistos[rid] = cant
+    return list(vistos.items())
+
+
+def _obtener_plantillas_con_recursos(cursor, plantilla_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    condicion = "WHERE activo = TRUE AND id = %s" if plantilla_id is not None else "WHERE activo = TRUE"
+    params: tuple = (plantilla_id,) if plantilla_id is not None else ()
+    cursor.execute(
+        f"""
+        SELECT id, nombre, tipo_evento, creado_por
+        FROM reservas_plantillas_evento
+        {condicion}
+        ORDER BY nombre ASC
+        """,
+        params,
+    )
+    plantillas = cursor.fetchall() or []
+    if not plantillas:
+        return []
+
+    ids = [p["id"] for p in plantillas]
+    placeholders = ", ".join(["%s"] * len(ids))
+    cursor.execute(
+        f"""
+        SELECT
+            pr.plantilla_id,
+            pr.recurso_id,
+            pr.cantidad,
+            rc.nombre,
+            rc.unidad
+        FROM reservas_plantilla_recursos pr
+        INNER JOIN reservas_recursos_catalogo rc ON rc.id = pr.recurso_id
+        WHERE pr.plantilla_id IN ({placeholders})
+          AND rc.activo = TRUE
+        ORDER BY rc.es_predefinido DESC, rc.nombre ASC
+        """,
+        tuple(ids),
+    )
+    mapa_recursos: Dict[int, List[Dict[str, Any]]] = {pid: [] for pid in ids}
+    for row in cursor.fetchall() or []:
+        mapa_recursos[row["plantilla_id"]].append({
+            "id": row["recurso_id"],
+            "recurso_id": row["recurso_id"],
+            "nombre": row["nombre"],
+            "unidad": row.get("unidad") or "pieza",
+            "cantidad": max(1, int(row.get("cantidad") or 1)),
+        })
+
+    resultado = []
+    for p in plantillas:
+        tipo = p.get("tipo_evento") or ""
+        resultado.append({
+            "id": p["id"],
+            "nombre": p["nombre"],
+            "tipo_evento": tipo,
+            "tipoEvento": tipo,
+            "creado_por": p.get("creado_por") or "",
+            "recursos": mapa_recursos.get(p["id"], []),
+        })
+    return resultado
+
+
+@app.get("/api/plantillas-evento")
+def listar_plantillas_evento():
+    """Lista las plantillas de evento activas desde la tabla compartida reservas_plantillas_evento."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            return _obtener_plantillas_con_recursos(cursor)
+    except pymysql.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar plantillas de evento: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.post("/api/plantillas-evento")
+def crear_plantilla_evento(req: PlantillaEventoSchema, request: Request):
+    """Crea una plantilla de evento y sus recursos asociados en reservas_plantillas_evento."""
+    nombre_limpio = (req.nombre or "").strip()
+    if not nombre_limpio:
+        raise HTTPException(status_code=400, detail="El nombre de la plantilla es obligatorio.")
+
+    tipo_raw = req.tipoEvento if req.tipoEvento is not None else req.tipo_evento
+    tipo_limpio = (tipo_raw or "").strip() or None
+    usuario_actual = obtener_usuario(request) or "Prefectura"
+    recursos_pares = _construir_recursos_deduplicados(req.recursos)
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM reservas_plantillas_evento WHERE LOWER(nombre) = LOWER(%s) AND activo = TRUE LIMIT 1",
+                (nombre_limpio,),
+            )
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Ya existe una plantilla activa con ese nombre.")
+
+            cursor.execute(
+                """
+                INSERT INTO reservas_plantillas_evento (nombre, tipo_evento, activo, creado_por)
+                VALUES (%s, %s, TRUE, %s)
+                """,
+                (nombre_limpio, tipo_limpio, usuario_actual),
+            )
+            plantilla_id = cursor.lastrowid
+
+            for rid, cant in recursos_pares:
+                cursor.execute(
+                    """
+                    INSERT INTO reservas_plantilla_recursos (plantilla_id, recurso_id, cantidad)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (plantilla_id, rid, cant),
+                )
+
+            creada = _obtener_plantillas_con_recursos(cursor, plantilla_id)
+        connection.commit()
+        return creada[0]
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al crear plantilla de evento: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.put("/api/plantillas-evento/{plantilla_id}")
+def actualizar_plantilla_evento(plantilla_id: int, req: PlantillaEventoSchema):
+    """Actualiza el nombre, tipo y materiales de una plantilla de evento existente."""
+    nombre_limpio = (req.nombre or "").strip()
+    if not nombre_limpio:
+        raise HTTPException(status_code=400, detail="El nombre de la plantilla es obligatorio.")
+
+    tipo_raw = req.tipoEvento if req.tipoEvento is not None else req.tipo_evento
+    tipo_limpio = (tipo_raw or "").strip() or None
+    recursos_pares = _construir_recursos_deduplicados(req.recursos)
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM reservas_plantillas_evento WHERE id = %s AND activo = TRUE LIMIT 1",
+                (plantilla_id,),
+            )
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Plantilla de evento no encontrada.")
+
+            cursor.execute(
+                "SELECT id FROM reservas_plantillas_evento WHERE LOWER(nombre) = LOWER(%s) AND activo = TRUE AND id != %s LIMIT 1",
+                (nombre_limpio, plantilla_id),
+            )
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Ya existe otra plantilla activa con ese nombre.")
+
+            cursor.execute(
+                """
+                UPDATE reservas_plantillas_evento
+                SET nombre = %s, tipo_evento = %s
+                WHERE id = %s
+                """,
+                (nombre_limpio, tipo_limpio, plantilla_id),
+            )
+            cursor.execute("DELETE FROM reservas_plantilla_recursos WHERE plantilla_id = %s", (plantilla_id,))
+            for rid, cant in recursos_pares:
+                cursor.execute(
+                    """
+                    INSERT INTO reservas_plantilla_recursos (plantilla_id, recurso_id, cantidad)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (plantilla_id, rid, cant),
+                )
+
+            actualizada = _obtener_plantillas_con_recursos(cursor, plantilla_id)
+        connection.commit()
+        return actualizada[0]
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al actualizar plantilla de evento: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.delete("/api/plantillas-evento/{plantilla_id}")
+def eliminar_plantilla_evento(plantilla_id: int):
+    """Realiza baja lógica (activo = FALSE) de una plantilla de evento."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id FROM reservas_plantillas_evento WHERE id = %s AND activo = TRUE LIMIT 1",
+                (plantilla_id,),
+            )
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Plantilla de evento no encontrada.")
+
+            cursor.execute("UPDATE reservas_plantillas_evento SET activo = FALSE WHERE id = %s", (plantilla_id,))
+        connection.commit()
+        return {"success": True, "id": plantilla_id, "message": "Plantilla de evento eliminada."}
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al eliminar plantilla de evento: {str(e)}")
+    finally:
+        connection.close()
+
+
+
