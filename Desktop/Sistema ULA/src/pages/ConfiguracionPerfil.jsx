@@ -167,9 +167,18 @@ export default function ConfiguracionPerfil() {
     if (!usuarioAEliminar) return;
     setEliminando(true);
     try {
-      const res = await fetch(`/api/usuarios/${usuarioAEliminar.id}?admin_correo=${encodeURIComponent(usuario.correo)}`, { method: 'DELETE' });
+      const esReservas = Boolean(usuarioAEliminar.esReservas);
+      const url = esReservas
+        ? `/api/reservas/usuarios/${encodeURIComponent(usuarioAEliminar.google_sub || usuarioAEliminar.id)}?admin_correo=${encodeURIComponent(usuario.correo)}`
+        : `/api/usuarios/${usuarioAEliminar.id}?admin_correo=${encodeURIComponent(usuario.correo)}`;
+
+      const res = await fetch(url, { method: 'DELETE' });
       if (res.ok) {
-        setUsuarios(prev => prev.filter(u => u.id !== usuarioAEliminar.id));
+        if (esReservas) {
+          setUsuariosReservas(prev => prev.filter(u => u.id !== usuarioAEliminar.id));
+        } else {
+          setUsuarios(prev => prev.filter(u => u.id !== usuarioAEliminar.id));
+        }
         toast(`Usuario eliminado correctamente.`, 'exito');
         setUsuarioAEliminar(null);
       } else {
@@ -544,14 +553,26 @@ export default function ConfiguracionPerfil() {
                         <p className="text-[10px] text-[#75777f] truncate">{ur.correo}</p>
                       </div>
 
-                      <div className="flex-shrink-0 text-right space-y-1">
-                        <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${badgeClase}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${dotClase}`} />
-                          {etiquetaEstado}
-                        </span>
-                        <p className="text-[9px] text-[#75777f] font-medium">
-                          {ur.ultimo_acceso_en ? fmtFechaHora(ur.ultimo_acceso_en) : fmtFecha(ur.creado_en)}
-                        </p>
+                      <div className="flex-shrink-0 flex items-center gap-3">
+                        <div className="text-right space-y-1">
+                          <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${badgeClase}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${dotClase}`} />
+                            {etiquetaEstado}
+                          </span>
+                          <p className="text-[9px] text-[#75777f] font-medium">
+                            {ur.ultimo_acceso_en ? fmtFechaHora(ur.ultimo_acceso_en) : fmtFecha(ur.creado_en)}
+                          </p>
+                        </div>
+                        {esAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setUsuarioAEliminar({ ...ur, esReservas: true })}
+                            title="Eliminar usuario de SIPREF Reservas"
+                            className="w-8 h-8 rounded-full flex items-center justify-center text-red-400 hover:text-white hover:bg-red-500 transition-colors border border-transparent hover:border-red-600"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">delete</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

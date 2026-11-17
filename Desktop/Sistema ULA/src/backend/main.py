@@ -11083,3 +11083,53 @@ def listar_usuarios_reservas_bd():
         connection.close()
 
 
+@app.delete("/api/reservas/usuarios/{google_sub}")
+def eliminar_usuario_reservas_bd(google_sub: str, admin_correo: str):
+    """Elimina un usuario de SIPREF Reservas (sesiones, solicitudes y usuario) si lo solicita el administrador."""
+    correo_admin_permitido = "yenri.moo@alumno.universidadlatino.edu.mx"
+    if (admin_correo or "").strip().lower() != correo_admin_permitido:
+        raise HTTPException(status_code=403, detail="Solo el administrador puede eliminar usuarios de SIPREF Reservas.")
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT google_sub, correo, nombre, estado FROM reservas_usuarios WHERE google_sub = %s",
+                (google_sub,),
+            )
+            u = cursor.fetchone()
+            if not u:
+                raise HTTPException(status_code=404, detail="Usuario de SIPREF Reservas no encontrado.")
+
+            cursor.execute("DELETE FROM reservas_sesiones WHERE google_sub = %s", (google_sub,))
+            cursor.execute(
+                "DELETE FROM reservas_solicitudes_acceso WHERE google_sub = %s OR correo = %s",
+                (google_sub, u["correo"]),
+            )
+            cursor.execute("DELETE FROM reservas_usuarios WHERE google_sub = %s", (google_sub,))
+
+            docente_ref = f"{u['nombre']} ({u['correo']})" if u.get("nombre") and u.get("correo") else (u.get("nombre") or u.get("correo"))
+            registrar_bitacora(
+                cursor=cursor,
+                usuario=admin_correo.strip(),
+                tipo_operacion="eliminar_usuario_reservas",
+                modulo_afectado="reservas_usuarios",
+                docente=docente_ref,
+                estado_anterior=u.get("estado"),
+                estado_nuevo="ELIMINADO",
+                motivo=f"Usuario de SIPREF Reservas eliminado por administrador ({admin_correo.strip()})",
+                datos_anteriores={"google_sub": google_sub, "correo": u.get("correo"), "nombre": u.get("nombre")},
+            )
+
+        connection.commit()
+        return {"success": True, "message": "Usuario de SIPREF Reservas eliminado correctamente."}
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al eliminar usuario de SIPREF Reservas: {str(e)}")
+    finally:
+        connection.close()
+
+
