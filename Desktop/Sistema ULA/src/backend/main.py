@@ -11350,35 +11350,49 @@ def listar_usuarios_reservas_bd():
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT
-                    google_sub,
-                    correo,
-                    nombre,
-                    foto_url,
-                    estado,
-                    creado_en,
-                    actualizado_en,
-                    ultimo_acceso_en
-                FROM reservas_usuarios
+                    u.google_sub,
+                    u.correo,
+                    u.nombre,
+                    u.foto_url,
+                    u.estado,
+                    u.creado_en,
+                    u.actualizado_en,
+                    u.ultimo_acceso_en,
+                    (
+                        SELECT CASE
+                            WHEN s.revocada_en IS NULL AND s.expira_en > NOW() THEN 1
+                            ELSE 0
+                        END
+                        FROM reservas_sesiones s
+                        WHERE s.google_sub = u.google_sub
+                        ORDER BY s.creado_en DESC
+                        LIMIT 1
+                    ) AS sesion_activa
+                FROM reservas_usuarios u
                 ORDER BY
                     CASE
-                        WHEN UPPER(estado) IN ('ACTIVO', 'ACTIVA', 'APROBADA', 'APROBADO') THEN 1
-                        WHEN UPPER(estado) IN ('PENDIENTE', 'PENDIENTE_APROBACION') THEN 2
+                        WHEN UPPER(u.estado) IN ('ACTIVO', 'ACTIVA', 'APROBADA', 'APROBADO') THEN 1
+                        WHEN UPPER(u.estado) IN ('PENDIENTE', 'PENDIENTE_APROBACION') THEN 2
                         ELSE 3
                     END,
-                    ultimo_acceso_en DESC,
-                    nombre ASC
+                    u.ultimo_acceso_en DESC,
+                    u.nombre ASC
             """)
             filas = cursor.fetchall() or []
 
         resultado = []
         for u in filas:
+            estado_str = (u.get("estado") or "PENDIENTE").strip()
+            es_aprobado = estado_str.upper() in ("ACTIVO", "ACTIVA", "APROBADA", "APROBADO")
+            en_linea = bool(es_aprobado and u.get("sesion_activa"))
             resultado.append({
                 "id": u["google_sub"],
                 "google_sub": u["google_sub"],
                 "correo": u["correo"],
                 "nombre": u["nombre"],
                 "foto_url": u.get("foto_url"),
-                "estado": u.get("estado") or "PENDIENTE",
+                "estado": estado_str,
+                "en_linea": en_linea,
                 "creado_en": u["creado_en"].isoformat() if u.get("creado_en") else None,
                 "actualizado_en": u["actualizado_en"].isoformat() if u.get("actualizado_en") else None,
                 "ultimo_acceso_en": u["ultimo_acceso_en"].isoformat() if u.get("ultimo_acceso_en") else None,

@@ -522,16 +522,27 @@ export default function ConfiguracionPerfil() {
                   const estadoUpper = String(ur.estado || 'PENDIENTE').toUpperCase();
                   const esActivo = esEstadoReservasActivo(estadoUpper);
                   const esPendiente = ESTADOS_RESERVAS_PENDIENTES.has(estadoUpper);
+                  const estaConectado = esActivo && Boolean(ur.en_linea);
                   const mostrarFoto = ur.foto_url && !fotosReservasFallidas[ur.id];
                   const inicial = (ur.nombre || ur.correo || 'U').trim().charAt(0).toUpperCase();
                   const badgeClase = esActivo
-                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    ? estaConectado
+                      ? 'bg-green-50 text-green-700 border border-green-200'
+                      : 'bg-[#f4f3f6] text-[#75777f] border border-[#c5c6cf]/30'
                     : esPendiente
                     ? 'bg-amber-50 text-amber-700 border border-amber-200'
                     : 'bg-red-50 text-red-600 border border-red-200';
-                  const dotClase = esActivo ? 'bg-green-500' : esPendiente ? 'bg-amber-500' : 'bg-red-500';
+                  const dotClase = esActivo
+                    ? estaConectado
+                      ? 'bg-green-400'
+                      : 'bg-[#c5c6cf]'
+                    : esPendiente
+                    ? 'bg-amber-500'
+                    : 'bg-red-500';
                   const etiquetaEstado = esActivo
-                    ? 'Activo'
+                    ? estaConectado
+                      ? 'En línea'
+                      : 'Desconectado'
                     : esPendiente
                     ? 'Pendiente'
                     : estadoUpper === 'RECHAZADA' || estadoUpper === 'RECHAZADO'
@@ -565,7 +576,7 @@ export default function ConfiguracionPerfil() {
                       <div className="flex-shrink-0 flex items-center gap-3">
                         <div className="text-right space-y-1">
                           <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${badgeClase}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${dotClase}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full ${dotClase} ${estaConectado ? 'animate-pulse' : ''}`} />
                             {etiquetaEstado}
                           </span>
                           <p className="text-[9px] text-[#75777f] font-medium">
@@ -594,11 +605,11 @@ export default function ConfiguracionPerfil() {
                 {usuariosReservas.length} usuario{usuariosReservas.length !== 1 ? 's' : ''} en Reservas
               </p>
               {(() => {
-                const activos = usuariosReservas.filter((u) => esEstadoReservasActivo(u.estado)).length;
+                const totalEnLineaReservas = usuariosReservas.filter((u) => esEstadoReservasActivo(u.estado) && Boolean(u.en_linea)).length;
                 return (
                   <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-lg">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                    {activos} activo{activos !== 1 ? 's' : ''}
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                    {totalEnLineaReservas} en línea
                   </span>
                 );
               })()}
