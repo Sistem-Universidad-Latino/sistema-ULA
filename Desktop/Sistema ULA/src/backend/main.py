@@ -11655,6 +11655,16 @@ def listar_recursos_catalogo():
                 ORDER BY es_predefinido DESC, nombre ASC
             """)
             filas = cursor.fetchall() or []
+            if not filas:
+                cursor.execute("UPDATE reservas_recursos_catalogo SET activo = TRUE WHERE es_predefinido = TRUE")
+                connection.commit()
+                cursor.execute("""
+                    SELECT id, nombre, unidad, es_predefinido
+                    FROM reservas_recursos_catalogo
+                    WHERE activo = TRUE
+                    ORDER BY es_predefinido DESC, nombre ASC
+                """)
+                filas = cursor.fetchall() or []
 
         return [
             {
@@ -11667,6 +11677,37 @@ def listar_recursos_catalogo():
         ]
     except pymysql.Error as e:
         raise HTTPException(status_code=500, detail=f"Error al consultar el catálogo de materiales: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.post("/api/recursos/restaurar-predefinidos")
+def restaurar_recursos_predefinidos():
+    """Reactiva todos los materiales predefinidos del catálogo compartido."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE reservas_recursos_catalogo SET activo = TRUE WHERE es_predefinido = TRUE")
+            cursor.execute("""
+                SELECT id, nombre, unidad, es_predefinido
+                FROM reservas_recursos_catalogo
+                WHERE activo = TRUE
+                ORDER BY es_predefinido DESC, nombre ASC
+            """)
+            filas = cursor.fetchall() or []
+        connection.commit()
+        return [
+            {
+                "id": r["id"],
+                "nombre": r["nombre"],
+                "unidad": r.get("unidad") or "pieza",
+                "es_predefinido": bool(r.get("es_predefinido", False)),
+            }
+            for r in filas
+        ]
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al restaurar materiales predefinidos: {str(e)}")
     finally:
         connection.close()
 

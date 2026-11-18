@@ -571,7 +571,11 @@ fs.writeFileSync(
     {
       version: 3,
       routes: [
+        { src: '^/api/send-email$', dest: '/api/send-email' },
+        { src: '^/api/incidencias/exportar-email$', dest: '/api/send-email' },
         { handle: 'filesystem' },
+        { src: '^/api/(.*)$', dest: 'https://sistema-ula-backend-18ld.onrender.com/api/$1' },
+        { src: '^/upload-pdf$', dest: 'https://sistema-ula-backend-18ld.onrender.com/upload-pdf' },
         { src: '/(.*)', dest: '/index.html' },
       ],
     },

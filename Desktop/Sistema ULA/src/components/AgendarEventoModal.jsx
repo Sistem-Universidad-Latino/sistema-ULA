@@ -47,6 +47,8 @@ export default function AgendarEventoModal({
   const [modoEliminarMateriales, setModoEliminarMateriales] = useState(false);
   const [materialesParaEliminar, setMaterialesParaEliminar] = useState([]);
   const [eliminandoLoteMateriales, setEliminandoLoteMateriales] = useState(false);
+  const [cargandoRecursos, setCargandoRecursos] = useState(false);
+  const [restaurandoPredefinidos, setRestaurandoPredefinidos] = useState(false);
 
   // Plantillas de evento compartidas (reservas_plantillas_evento)
   const [plantillasEvento, setPlantillasEvento] = useState([]);
@@ -96,12 +98,14 @@ export default function AgendarEventoModal({
   // Cargar catálogo compartido de materiales y plantillas de evento cuando abre el modal
   useEffect(() => {
     if (!isOpen) return;
+    setCargandoRecursos(true);
     fetch(`${API_URL}/api/recursos`)
       .then(res => (res.ok ? res.json() : []))
       .then(data => {
         if (Array.isArray(data)) setRecursosCatalogo(data);
       })
-      .catch(err => console.error('Error al cargar catálogo de materiales:', err));
+      .catch(err => console.error('Error al cargar catálogo de materiales:', err))
+      .finally(() => setCargandoRecursos(false));
 
     fetch(`${API_URL}/api/plantillas-evento`)
       .then(res => (res.ok ? res.json() : []))
@@ -187,7 +191,13 @@ export default function AgendarEventoModal({
     } else {
       restablecerCamposEnBlanco();
     }
-    setMaterialesDesplegados(Boolean(eventoAEditar?.recursos?.length));
+    setMaterialesDesplegados(
+      Boolean(
+        eventoAEditar?.recursos?.length ||
+        eventoAEditar?.acomodo_mobiliario ||
+        Number(eventoAEditar?.sillas_mesa_panel) > 0
+      )
+    );
     setMostrarModalPlantilla(false);
     setPlantillaEnEdicion(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -826,19 +836,57 @@ export default function AgendarEventoModal({
     }
   };
 
+  const handleRestaurarPredefinidos = async () => {
+    setRestaurandoPredefinidos(true);
+    try {
+      const res = await fetch(`${API_URL}/api/recursos/restaurar-predefinidos`, {
+        method: 'POST'
+      });
+      const data = await res.json().catch(() => []);
+      if (res.ok && Array.isArray(data)) {
+        setRecursosCatalogo(data);
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'success',
+          title: 'Materiales predefinidos restaurados',
+          showConfirmButton: false,
+          timer: 2500
+        });
+      }
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'No se pudieron restaurar los materiales',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    } finally {
+      setRestaurandoPredefinidos(false);
+    }
+  };
+
   const cantidadMaterialesSeleccionados = Object.keys(recursosSeleccionados).length;
+  const partesResumenMateriales = [
+    ...Object.entries(recursosSeleccionados)
+      .map(([idStr, cant]) => {
+        const mat = recursosCatalogo.find(r => String(r.id) === String(idStr));
+        if (!mat) return null;
+        const requiereCant = mat.unidad !== 'sin_cantidad' && mat.unidad !== 'fijo';
+        const cantNum = Math.max(1, parseInt(cant, 10) || 1);
+        return requiereCant ? `${cantNum} ${mat.nombre}` : mat.nombre;
+      })
+      .filter(Boolean),
+    Number(formData.sillas_mesa_panel) > 0 ? `${parseInt(formData.sillas_mesa_panel, 10)} sillas mesa panel` : null,
+    formData.acomodo_mobiliario?.trim() ? `Acomodo: ${formData.acomodo_mobiliario.trim()}` : null
+  ].filter(Boolean);
   const textoResumenMateriales =
-    cantidadMaterialesSeleccionados === 0
+    partesResumenMateriales.length === 0
       ? 'Ningún material seleccionado'
-      : Object.entries(recursosSeleccionados)
-          .map(([idStr, cant]) => {
-            const mat = recursosCatalogo.find(r => String(r.id) === String(idStr));
-            if (!mat) return null;
-            const requiereCant = mat.unidad !== 'sin_cantidad' && mat.unidad !== 'fijo';
-            return requiereCant ? `${cant} ${mat.nombre}` : mat.nombre;
-          })
-          .filter(Boolean)
-          .join(', ');
+      : partesResumenMateriales.join(' • ');
+  const totalPredefinidosActivos = recursosCatalogo.filter(r => r.es_predefinido).length;
 
   const renderCuadriculaMateriales = (mapaSeleccionado, setter, permitirEliminarCatalogo = false) => (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -899,6 +947,12 @@ export default function AgendarEventoModal({
                     inputMode="numeric"
                     value={cantidad}
                     onFocus={(e) => e.target.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.currentTarget.blur();
+                      }
+                    }}
                     onChange={(e) => establecerCantidadEnMapa(setter, rec.id, e.target.value)}
                     onBlur={() => normalizarCantidadEnMapa(setter, rec.id)}
                     aria-label={`Cantidad de ${rec.nombre}`}
@@ -1217,7 +1271,11 @@ export default function AgendarEventoModal({
 
             {materialesDesplegados && (
               <>
-                {renderCuadriculaMateriales(recursosSeleccionados, setRecursosSeleccionados, true)}
+                {cargandoRecursos && recursosCatalogo.length === 0 ? (
+                  <p className="text-xs text-slate-400 font-semibold py-2">Cargando catálogo de materiales...</p>
+                ) : (
+                  renderCuadriculaMateriales(recursosSeleccionados, setRecursosSeleccionados, true)
+                )}
 
             {modoEliminarMateriales ? (
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
@@ -1249,13 +1307,26 @@ export default function AgendarEventoModal({
               </div>
             ) : !mostrarNuevoMaterial ? (
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => setMostrarNuevoMaterial(true)}
-                  className="text-xs font-bold text-[#1c355e] hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  + Agregar otro material
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setMostrarNuevoMaterial(true)}
+                    className="text-xs font-bold text-[#1c355e] hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    + Agregar otro material
+                  </button>
+                  {totalPredefinidosActivos < 11 && (
+                    <button
+                      type="button"
+                      disabled={restaurandoPredefinidos}
+                      onClick={handleRestaurarPredefinidos}
+                      className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    >
+                      <span className="material-symbols-outlined text-sm">restore</span>
+                      {restaurandoPredefinidos ? 'Restaurando...' : 'Restaurar predefinidos'}
+                    </button>
+                  )}
+                </div>
                 {recursosCatalogo.length > 0 && (
                   <button
                     type="button"
@@ -1278,6 +1349,12 @@ export default function AgendarEventoModal({
                     type="text"
                     value={nuevoMaterialNombre}
                     onChange={(e) => setNuevoMaterialNombre(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleGuardarNuevoMaterial();
+                      }
+                    }}
                     placeholder="Nombre del material"
                     className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
                   />
@@ -1336,7 +1413,12 @@ export default function AgendarEventoModal({
                         <button
                           key={tipo}
                           type="button"
-                          onClick={() => setFormData(prev => ({ ...prev, acomodo_mobiliario: tipo }))}
+                          onClick={() =>
+                            setFormData(prev => ({
+                              ...prev,
+                              acomodo_mobiliario: prev.acomodo_mobiliario === tipo ? '' : tipo
+                            }))
+                          }
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
                             formData.acomodo_mobiliario === tipo
                               ? 'bg-[#1c355e] text-white border-[#1c355e]'
@@ -1358,6 +1440,9 @@ export default function AgendarEventoModal({
                         maxLength={255}
                         placeholder="Ej. Auditorio con 4 mesas al frente y pasillo central"
                         value={formData.acomodo_mobiliario}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.preventDefault();
+                        }}
                         onChange={(e) => setFormData(prev => ({ ...prev, acomodo_mobiliario: e.target.value }))}
                         className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
                       />
@@ -1366,14 +1451,56 @@ export default function AgendarEventoModal({
                       <label className="block text-[11px] font-bold text-slate-600 mb-1">
                         Sillas para mesa panel
                       </label>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="0"
-                        value={formData.sillas_mesa_panel}
-                        onChange={(e) => setFormData(prev => ({ ...prev, sillas_mesa_panel: e.target.value }))}
-                        className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
-                      />
+                      <div className="inline-flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFormData(prev => {
+                              const actual = parseInt(prev.sillas_mesa_panel, 10) || 0;
+                              const sig = Math.max(0, actual - 1);
+                              return { ...prev, sillas_mesa_panel: sig === 0 ? '' : String(sig) };
+                            })
+                          }
+                          className="px-2.5 py-1.5 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
+                          aria-label="Disminuir sillas mesa panel"
+                        >
+                          −
+                        </button>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="0"
+                          value={formData.sillas_mesa_panel}
+                          onFocus={(e) => e.target.select()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              e.currentTarget.blur();
+                            }
+                          }}
+                          onChange={(e) => {
+                            const soloDigitos = e.target.value.replace(/\D/g, '');
+                            setFormData(prev => ({
+                              ...prev,
+                              sillas_mesa_panel: soloDigitos === '' ? '' : String(parseInt(soloDigitos, 10))
+                            }));
+                          }}
+                          className="w-full px-2 py-1.5 text-xs font-extrabold text-[#1c355e] text-center bg-transparent outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFormData(prev => {
+                              const actual = parseInt(prev.sillas_mesa_panel, 10) || 0;
+                              return { ...prev, sillas_mesa_panel: String(actual + 1) };
+                            })
+                          }
+                          className="px-2.5 py-1.5 text-slate-600 hover:bg-slate-200/70 font-bold cursor-pointer"
+                          aria-label="Aumentar sillas mesa panel"
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1382,8 +1509,6 @@ export default function AgendarEventoModal({
 
             <p className="text-[11px] text-slate-500 font-medium pt-1">
               Resumen: {textoResumenMateriales}
-              {Number(formData.sillas_mesa_panel) > 0 ? ` • ${formData.sillas_mesa_panel} sillas mesa panel` : ''}
-              {formData.acomodo_mobiliario?.trim() ? ` • Acomodo: ${formData.acomodo_mobiliario.trim()}` : ''}
             </p>
           </div>
 
