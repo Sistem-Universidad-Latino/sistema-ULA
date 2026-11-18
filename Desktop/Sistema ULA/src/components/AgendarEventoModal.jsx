@@ -950,7 +950,18 @@ export default function AgendarEventoModal({
   const handleEliminarAcomodoCatalogo = async (item) => {
     try {
       const res = await fetch(`${API_URL}/api/acomodos/${item.id}`, { method: 'DELETE' });
-      if (!res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudo eliminar la opción de acomodo',
+          showConfirmButton: false,
+          timer: 2500
+        });
+        return;
+      }
       setAcomodosCatalogo(prev => prev.filter(a => a.id !== item.id));
       if (formData.acomodo_mobiliario === item.nombre) {
         setFormData(prev => ({ ...prev, acomodo_mobiliario: '' }));

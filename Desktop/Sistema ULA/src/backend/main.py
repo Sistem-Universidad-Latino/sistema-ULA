@@ -10834,11 +10834,8 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
                 server.login(sender_email, smtp_pass)
                 server.sendmail(sender_email, all_recipients, msg.as_string())
             enviado_exitoso = True
-            print("Reporte de incidencias enviado exitosamente vía SMTP directo.")
         except Exception as e:
             error_smtp = str(e)
-            print(f"SMTP directo no disponible o bloqueado en la nube ({e}). Intentando relay Vercel / fallback HTTP...")
-
     # Si SMTP directo falla en Render, intentar relay /api/send-email en Vercel para conservar adjuntos
     if not enviado_exitoso:
         relay_url = _detectar_url_vercel_relay(request)
