@@ -330,7 +330,12 @@ module.exports = async function handler(req, res) {
   try {
     // Modo 1: Relay directo con MIME en Base64
     if (body.raw_mime_b64 && Array.isArray(body.recipients) && body.recipients.length > 0) {
-      const rawMime = Buffer.from(body.raw_mime_b64, 'base64');
+      let rawMimeText = Buffer.from(body.raw_mime_b64, 'base64').toString('utf8');
+      rawMimeText = rawMimeText.replace(
+        /^From:\s*([^<\r\n]+<\s*[^>\r\n]+\s*>|[^\r\n]+)$/m,
+        'From: "SIPREF ULA" <' + (extractEmail(body.from_email) || smtpUser) + '>'
+      );
+      const rawMime = Buffer.from(rawMimeText, 'utf8');
       await sendSmtpTls({
         host: smtpHost,
         port: smtpPort,
@@ -470,7 +475,7 @@ module.exports = async function handler(req, res) {
     ].join('\n');
 
     const rawMime = buildMultipartMime({
-      fromName: 'SIPREF Incidencias',
+      fromName: 'SIPREF ULA',
       fromEmail: smtpUser,
       destinos,
       ccList,

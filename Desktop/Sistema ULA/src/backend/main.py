@@ -530,6 +530,10 @@ def _enviar_smtp(correo_destino: str, asunto: str, html: str):
         "user_id": public_key,
         "accessToken": private_key,
         "template_params": {
+            "from_name": "SIPREF ULA",
+            "sender_name": "SIPREF ULA",
+            "name": "SIPREF ULA",
+            "nombre_remitente": "SIPREF ULA",
             "to_email": correo_destino,
             "email": correo_destino,
             "user_email": correo_destino,
@@ -587,7 +591,7 @@ def enviar_correo_otp(correo_destino: str, codigo: str, nombre: str):
     if sender_email and smtp_pass:
         try:
             msg = MIMEMultipart()
-            msg['From'] = sender_email
+            msg['From'] = f"SIPREF ULA <{sender_email}>"
             msg['To'] = correo_destino
             msg['Subject'] = "Código de verificación — SIPREF ULA"
             msg.attach(MIMEText(html, 'html'))
@@ -7789,7 +7793,7 @@ async def enviar_examenes_por_correo(body: dict):
 
         # Construir el correo con adjunto
         msg = MIMEMultipart()
-        msg['From'] = sender_email
+        msg['From'] = f"SIPREF ULA <{sender_email}>"
         msg['To'] = correo
         msg['Subject'] = asunto
 
@@ -7873,33 +7877,13 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
     smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "") or "from lcxt muzd wugb").strip()
 
     msg = MIMEMultipart()
-    msg['From'] = f"SIPREF ULA <{sender_email}>"
+    msg['From'] = f'"SIPREF ULA" <{sender_email}>'
     msg['To'] = dest_limpio
     msg['Subject'] = asunto
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
     raw_bytes = msg.as_bytes()
 
-    if sender_email and smtp_pass:
-        # 1a. Intentar SMTP SSL 465
-        try:
-            with smtplib.SMTP_SSL(smtp_host, 465, timeout=3.5) as server:
-                server.login(sender_email, smtp_pass)
-                server.sendmail(sender_email, [dest_limpio], raw_bytes)
-            return True
-        except Exception as e_465:
-            print(f"SMTP 465 no disponible ({e_465}), probando puerto {smtp_port}...")
-
-        # 1b. Intentar SMTP STARTTLS 587
-        try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=3.5) as server:
-                server.starttls()
-                server.login(sender_email, smtp_pass)
-                server.sendmail(sender_email, [dest_limpio], raw_bytes)
-            return True
-        except Exception as e_587:
-            print(f"SMTP {smtp_port} no disponible ({e_587}), probando relay Vercel...")
-
-    # 2. Relay serverless en Vercel (/api/send-email) cuando Render bloquea puertos SMTP salientes
+    # 1. Relay serverless en Vercel (/api/send-email) — preserva siempre el remitente "SIPREF ULA" <...>
     relay_candidates = []
     for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
         val = (os.getenv(env_key, "") or "").strip()
@@ -7908,6 +7892,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
             base = base.rstrip("/")
             relay_candidates.append(base if base.endswith("/api/send-email") else f"{base}/api/send-email")
     relay_candidates.extend([
+        "https://sistema-ula.vercel.app/api/send-email",
         "https://sipref-ula.vercel.app/api/send-email",
         "https://sistema-sipref.vercel.app/api/send-email",
     ])
@@ -7935,6 +7920,26 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
                     return True
         except Exception as e_rel:
             print(f"Relay Vercel {r_url} no disponible: {e_rel}")
+
+    if sender_email and smtp_pass:
+        # 2a. Intentar SMTP SSL 465 directo
+        try:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=3.5) as server:
+                server.login(sender_email, smtp_pass)
+                server.sendmail(sender_email, [dest_limpio], raw_bytes)
+            return True
+        except Exception as e_465:
+            print(f"SMTP 465 no disponible ({e_465}), probando puerto {smtp_port}...")
+
+        # 2b. Intentar SMTP STARTTLS 587 directo
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=3.5) as server:
+                server.starttls()
+                server.login(sender_email, smtp_pass)
+                server.sendmail(sender_email, [dest_limpio], raw_bytes)
+            return True
+        except Exception as e_587:
+            print(f"SMTP {smtp_port} no disponible ({e_587}), probando fallback EmailJS...")
 
     # 3. Fallback EmailJS
     try:
@@ -8213,7 +8218,7 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
 
                 ok_envio = enviar_correo_generico(
                     correo_destino=r["correo"],
-                    asunto=f"Recordatorio de evento: {r['nombre_evento']} — SIPREF",
+                    asunto=f"Recordatorio de evento: {r['nombre_evento']} — SIPREF ULA",
                     html_content=html_correo
                 )
 
@@ -8271,7 +8276,8 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
                 intentos_prev = int(r.get("intentos") or 0)
                 cursor.execute("""
                     UPDATE reservas_recordatorios
-                    SET intentos = %s
+                    SET intentos = %s,
+                        enviado_en = '1970-01-01 00:00:00'
                     WHERE id = %s AND enviado_en IS NULL AND COALESCE(intentos, 0) = %s
                 """, (intentos_prev + 1, r["id"], intentos_prev))
                 if cursor.rowcount == 0:
@@ -8303,7 +8309,7 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
 
                     ok_envio = enviar_correo_generico(
                         correo_destino=correo_dest,
-                        asunto=f"Recordatorio de evento: {r.get('nombre_evento') or 'Reservación'} — SIPREF Reservas",
+                        asunto=f"Recordatorio de evento: {r.get('nombre_evento') or 'Reservación'} — SIPREF ULA",
                         html_content=html_correo,
                     )
                     if ok_envio:
@@ -8313,7 +8319,7 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
                         )
                     else:
                         cursor.execute(
-                            "UPDATE reservas_recordatorios SET ultimo_error = 'No se pudo entregar correo por SMTP ni fallback' WHERE id = %s",
+                            "UPDATE reservas_recordatorios SET enviado_en = NULL, ultimo_error = 'No se pudo entregar correo por SMTP ni fallback' WHERE id = %s",
                             (r["id"],),
                         )
                 else:
@@ -8326,7 +8332,7 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
                 print(f"Error procesando recordatorio de SIPREF Reservas {r['id']}: {e_rr}")
                 try:
                     cursor.execute(
-                        "UPDATE reservas_recordatorios SET ultimo_error = %s WHERE id = %s",
+                        "UPDATE reservas_recordatorios SET enviado_en = NULL, ultimo_error = %s WHERE id = %s",
                         (str(e_rr)[:250], r["id"]),
                     )
                     connection.commit()
@@ -9327,7 +9333,7 @@ def api_exportar_eventos_email(req: ExportarEventosEmailRequest, request: Reques
         from email import encoders
 
         msg = MIMEMultipart()
-        msg['From'] = f"SIPREF Eventos <{sender_email}>"
+        msg['From'] = f"SIPREF ULA <{sender_email}>"
         msg['To'] = ", ".join(destinos)
         if cc_list: msg['Cc'] = ", ".join(cc_list)
         msg['Subject'] = req.asunto or "Reporte de Reservas y Eventos — SIPREF"
@@ -10956,7 +10962,7 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
     from email import encoders
 
     msg = MIMEMultipart()
-    msg['From'] = f"SIPREF Incidencias <{sender_email}>"
+    msg['From'] = f"SIPREF ULA <{sender_email}>"
     msg['To'] = ", ".join(destinos)
     if cc_list:
         msg['Cc'] = ", ".join(cc_list)
@@ -11025,7 +11031,7 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
             try:
                 import base64
                 brevo_payload = {
-                    "sender": {"name": "SIPREF Incidencias", "email": sender_email},
+                    "sender": {"name": "SIPREF ULA", "email": sender_email},
                     "to": [{"email": d} for d in destinos],
                     "subject": asunto,
                     "htmlContent": body_html,
