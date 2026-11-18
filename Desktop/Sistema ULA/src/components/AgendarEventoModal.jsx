@@ -398,14 +398,15 @@ export default function AgendarEventoModal({
   };
 
   const establecerCantidadEnMapa = (setter, recursoId, rawVal) => {
+    const soloDigitos = String(rawVal || '').replace(/\D/g, '');
     setter(prev => {
-      if (rawVal === '') {
+      if (soloDigitos === '') {
         return { ...prev, [recursoId]: '' };
       }
-      const parsed = parseInt(rawVal, 10);
+      const parsed = parseInt(soloDigitos, 10);
       return {
         ...prev,
-        [recursoId]: Number.isNaN(parsed) ? 1 : Math.max(1, parsed)
+        [recursoId]: Number.isNaN(parsed) ? '' : Math.max(1, parsed)
       };
     });
   };
@@ -894,13 +895,14 @@ export default function AgendarEventoModal({
                     −
                   </button>
                   <input
-                    type="number"
-                    min="1"
+                    type="text"
+                    inputMode="numeric"
                     value={cantidad}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => establecerCantidadEnMapa(setter, rec.id, e.target.value)}
                     onBlur={() => normalizarCantidadEnMapa(setter, rec.id)}
                     aria-label={`Cantidad de ${rec.nombre}`}
-                    className="w-12 px-1 py-1 font-extrabold text-[#1c355e] text-center bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    className="w-12 px-1 py-1 font-extrabold text-[#1c355e] text-center bg-transparent outline-none"
                   />
                   <button
                     type="button"
