@@ -44,6 +44,9 @@ export default function AgendarEventoModal({
   const [nuevoMaterialRequiereCantidad, setNuevoMaterialRequiereCantidad] = useState(true);
   const [guardandoMaterial, setGuardandoMaterial] = useState(false);
   const [materialesDesplegados, setMaterialesDesplegados] = useState(false);
+  const [modoEliminarMateriales, setModoEliminarMateriales] = useState(false);
+  const [materialesParaEliminar, setMaterialesParaEliminar] = useState([]);
+  const [eliminandoLoteMateriales, setEliminandoLoteMateriales] = useState(false);
 
   // Plantillas de evento compartidas (reservas_plantillas_evento)
   const [plantillasEvento, setPlantillasEvento] = useState([]);
@@ -137,6 +140,8 @@ export default function AgendarEventoModal({
     setNuevoMaterialNombre('');
     setNuevoMaterialRequiereCantidad(true);
     setPlantillaSeleccionadaId('');
+    setModoEliminarMateriales(false);
+    setMaterialesParaEliminar([]);
     setErrorDisponibilidad('');
   };
 
@@ -727,6 +732,7 @@ export default function AgendarEventoModal({
         delete next[rec.id];
         return next;
       });
+      setMaterialesParaEliminar(prev => prev.filter(id => id !== rec.id));
       Swal.fire({
         toast: true,
         position: 'top-end',
@@ -747,6 +753,78 @@ export default function AgendarEventoModal({
     }
   };
 
+  const alternarMaterialParaEliminar = (recursoId) => {
+    setMaterialesParaEliminar(prev =>
+      prev.includes(recursoId) ? prev.filter(id => id !== recursoId) : [...prev, recursoId]
+    );
+  };
+
+  const handleEliminarMaterialesSeleccionados = async () => {
+    if (materialesParaEliminar.length === 0) return;
+    const confirm = await Swal.fire({
+      title: `Eliminar ${materialesParaEliminar.length} ${materialesParaEliminar.length === 1 ? 'material' : 'materiales'}`,
+      text: '¿Eliminar los materiales seleccionados del catálogo compartido? Los eventos anteriores conservarán su registro.',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#dc2626',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: 'Sí, eliminar',
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true
+    });
+    if (!confirm.isConfirmed) return;
+
+    setEliminandoLoteMateriales(true);
+    try {
+      const res = await fetch(`${API_URL}/api/recursos/eliminar-lote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: materialesParaEliminar })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudieron eliminar los materiales',
+          showConfirmButton: false,
+          timer: 3000
+        });
+        return;
+      }
+
+      const idsSet = new Set(materialesParaEliminar);
+      setRecursosCatalogo(prev => prev.filter(item => !idsSet.has(item.id)));
+      setRecursosSeleccionados(prev => {
+        const next = { ...prev };
+        materialesParaEliminar.forEach(id => delete next[id]);
+        return next;
+      });
+      setMaterialesParaEliminar([]);
+      setModoEliminarMateriales(false);
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: 'Materiales eliminados del catálogo',
+        showConfirmButton: false,
+        timer: 2500
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al eliminar materiales',
+        showConfirmButton: false,
+        timer: 3000
+      });
+    } finally {
+      setEliminandoLoteMateriales(false);
+    }
+  };
+
   const cantidadMaterialesSeleccionados = Object.keys(recursosSeleccionados).length;
   const textoResumenMateriales =
     cantidadMaterialesSeleccionados === 0
@@ -764,15 +842,21 @@ export default function AgendarEventoModal({
   const renderCuadriculaMateriales = (mapaSeleccionado, setter, permitirEliminarCatalogo = false) => (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
       {recursosCatalogo.map((rec) => {
-        const marcado = mapaSeleccionado[rec.id] !== undefined;
+        const enModoBorrar = permitirEliminarCatalogo && modoEliminarMateriales;
+        const marcadoBorrar = enModoBorrar && materialesParaEliminar.includes(rec.id);
+        const marcado = enModoBorrar ? marcadoBorrar : mapaSeleccionado[rec.id] !== undefined;
         const cantidad = mapaSeleccionado[rec.id] || 1;
-        const requiereCantidad = rec.unidad !== 'sin_cantidad' && rec.unidad !== 'fijo';
+        const requiereCantidad = !enModoBorrar && rec.unidad !== 'sin_cantidad' && rec.unidad !== 'fijo';
 
         return (
           <div
             key={rec.id}
             className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-xs transition-colors ${
-              marcado
+              enModoBorrar
+                ? marcadoBorrar
+                  ? 'bg-red-50 border-red-400 shadow-xs'
+                  : 'bg-white border-red-200/70 hover:border-red-300'
+                : marcado
                 ? 'bg-white border-[#1c355e]/40 shadow-xs'
                 : 'bg-white border-slate-200 hover:border-slate-300'
             }`}
@@ -781,8 +865,14 @@ export default function AgendarEventoModal({
               <input
                 type="checkbox"
                 checked={marcado}
-                onChange={(e) => alternarRecursoEnMapa(setter, rec.id, e.target.checked)}
-                className="rounded text-[#1c355e] focus:ring-[#1c355e]"
+                onChange={(e) => {
+                  if (enModoBorrar) {
+                    alternarMaterialParaEliminar(rec.id);
+                  } else {
+                    alternarRecursoEnMapa(setter, rec.id, e.target.checked);
+                  }
+                }}
+                className={`rounded ${enModoBorrar ? 'text-red-600 focus:ring-red-500' : 'text-[#1c355e] focus:ring-[#1c355e]'}`}
               />
               <span className="truncate">{rec.nombre}</span>
               {rec.unidad === 'fijo' && (
@@ -823,7 +913,7 @@ export default function AgendarEventoModal({
                 </div>
               )}
 
-              {permitirEliminarCatalogo && !rec.es_predefinido && (
+              {permitirEliminarCatalogo && !enModoBorrar && (
                 <button
                   type="button"
                   onClick={() => handleEliminarMaterial(rec)}
@@ -1127,8 +1217,36 @@ export default function AgendarEventoModal({
               <>
                 {renderCuadriculaMateriales(recursosSeleccionados, setRecursosSeleccionados, true)}
 
-            {!mostrarNuevoMaterial ? (
-              <div>
+            {modoEliminarMateriales ? (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-bold text-red-700">
+                  Marca arriba los materiales que deseas eliminar del catálogo ({materialesParaEliminar.length} seleccionados)
+                </p>
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoEliminarMateriales(false);
+                      setMaterialesParaEliminar([]);
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={materialesParaEliminar.length === 0 || eliminandoLoteMateriales}
+                    onClick={handleEliminarMaterialesSeleccionados}
+                    className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    {eliminandoLoteMateriales
+                      ? 'Eliminando...'
+                      : `Eliminar seleccionados (${materialesParaEliminar.length})`}
+                  </button>
+                </div>
+              </div>
+            ) : !mostrarNuevoMaterial ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setMostrarNuevoMaterial(true)}
@@ -1136,6 +1254,20 @@ export default function AgendarEventoModal({
                 >
                   + Agregar otro material
                 </button>
+                {recursosCatalogo.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMostrarNuevoMaterial(false);
+                      setModoEliminarMateriales(true);
+                      setMaterialesParaEliminar([]);
+                    }}
+                    className="text-xs font-bold text-red-600 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">delete_sweep</span>
+                    Seleccionar para eliminar
+                  </button>
+                )}
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-dashed border-[#1c355e]/30 p-3 space-y-2.5">

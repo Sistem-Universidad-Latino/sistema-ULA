@@ -11726,24 +11726,53 @@ def crear_o_reactivar_recurso_catalogo(req: RecursoCatalogoCreateSchema, request
         connection.close()
 
 
+class RecursosEliminarLoteSchema(BaseModel):
+    ids: List[int]
+
+
+@app.post("/api/recursos/eliminar-lote")
+def eliminar_recursos_catalogo_lote(req: RecursosEliminarLoteSchema):
+    """Realiza baja lógica (activo = FALSE) de múltiples materiales seleccionados del catálogo compartido."""
+    ids_limpios = sorted({int(i) for i in (req.ids or []) if int(i) > 0})
+    if not ids_limpios:
+        raise HTTPException(status_code=400, detail="Selecciona al menos un material para eliminar.")
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            placeholders = ", ".join(["%s"] * len(ids_limpios))
+            cursor.execute(
+                f"UPDATE reservas_recursos_catalogo SET activo = FALSE WHERE id IN ({placeholders})",
+                tuple(ids_limpios),
+            )
+            eliminados = cursor.rowcount
+        connection.commit()
+        return {
+            "success": True,
+            "ids": ids_limpios,
+            "eliminados": eliminados,
+            "message": "Materiales eliminados del catálogo.",
+        }
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al eliminar materiales del catálogo: {str(e)}")
+    finally:
+        connection.close()
+
+
 @app.delete("/api/recursos/{recurso_id}")
 def eliminar_recurso_catalogo(recurso_id: int):
-    """Realiza baja lógica (activo = FALSE) de un material agregado por el usuario."""
+    """Realiza baja lógica (activo = FALSE) de cualquier material del catálogo compartido."""
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT id, nombre, es_predefinido FROM reservas_recursos_catalogo WHERE id = %s",
+                "SELECT id, nombre FROM reservas_recursos_catalogo WHERE id = %s",
                 (recurso_id,),
             )
             rec = cursor.fetchone()
             if not rec:
                 raise HTTPException(status_code=404, detail="Material no encontrado en el catálogo.")
-            if rec.get("es_predefinido"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="No se pueden eliminar materiales predefinidos del catálogo.",
-                )
 
             cursor.execute("UPDATE reservas_recursos_catalogo SET activo = FALSE WHERE id = %s", (recurso_id,))
 
