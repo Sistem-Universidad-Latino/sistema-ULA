@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useToast, ToastContainer } from '../components/useToast';
 import Swal from 'sweetalert2';
+import { API_URL } from '../config/api';
 
 export default function GestionHorarios() {
   const { toast, toasts } = useToast();
@@ -30,7 +31,6 @@ export default function GestionHorarios() {
   const [filtroH_cuatri, setFiltroH_cuatri] = useState('');
   const [filtroH_carrera, setFiltroH_carrera] = useState('');
   
-  const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
   
   const handleRenombrarHistorial = (arch) => {

@@ -4,6 +4,7 @@ import { useUser } from './UserContext';
 import { useTime } from './TimeContext';
 import Swal from 'sweetalert2';
 import logo from './logo.png';
+import { API_URL } from '../config/api';
 
 export default function Layout() {
   const location = useLocation();
@@ -41,7 +42,6 @@ export default function Layout() {
           id: `exam-${c}`, titulo: `Exámenes: ${c}`, subtitulo: 'Calendario no cargado', tipo: 'examenes', carrera: c
         }))
       ];
-      const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
       try {
         // Obtener ciclo actual para filtrar
@@ -76,8 +76,7 @@ export default function Layout() {
   useEffect(() => {
     const cargarEstado = async () => {
       try {
-        const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
-        const [resSem, resCuat] = await Promise.all([
+          const [resSem, resCuat] = await Promise.all([
           fetch(`${API_URL}/api/estado-academico?plan=semestral&fecha=${fechaActualStr}`),
           fetch(`${API_URL}/api/estado-academico?plan=cuatrimestral&fecha=${fechaActualStr}`)
         ]);
@@ -168,8 +167,7 @@ export default function Layout() {
           });
         };
 
-        const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
-        const [resEx, resEv] = await Promise.all([
+          const [resEx, resEv] = await Promise.all([
           fetch(`${API_URL}/api/examenes-hoy`),
           fetch(`${API_URL}/api/eventos/notificaciones-activas`)
         ]);
@@ -251,7 +249,6 @@ export default function Layout() {
   // 3. Consultar solicitudes de acceso pendientes de SIPREF Reservas al montar y cada 30s
   const cargarSolicitudesAcceso = async () => {
     try {
-      const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
       const res = await fetch(`${API_URL}/api/reservas-acceso/pendientes`);
       if (!res.ok) return;
       const data = await res.json();
@@ -309,7 +306,6 @@ export default function Layout() {
     setSolicitudesAcceso((prev) => prev.filter((item) => item.id !== solId));
     setTotalSolicitudesAcceso((prev) => Math.max(0, prev - 1));
 
-    const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
     const endpoint =
       accion === 'aprobar'
         ? `${API_URL}/api/reservas-acceso/${encodeURIComponent(solId)}/aprobar`

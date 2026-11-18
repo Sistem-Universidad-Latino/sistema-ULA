@@ -3,6 +3,7 @@ import Swal from 'sweetalert2';
 import AgendarEventoModal from './AgendarEventoModal';
 import { useTime } from './TimeContext';
 import { useUser } from './UserContext';
+import { API_URL } from '../config/api';
 
 /**
  * Calcula el estado dinámico de un evento en tiempo real comparando con la hora institucional/actual
@@ -147,7 +148,6 @@ export default function AgendaEventos({ aulasList = [] }) {
   const [mostrarSugerenciasEmails, setMostrarSugerenciasEmails] = useState(true);
   const [campoDestino, setCampoDestino] = useState('destinatarios');
 
-  const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
   useEffect(() => {
     if (aulasList && aulasList.length > 0) {

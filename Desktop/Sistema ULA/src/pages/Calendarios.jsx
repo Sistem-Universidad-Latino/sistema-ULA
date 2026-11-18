@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useTime } from '../components/TimeContext';
 import Swal from 'sweetalert2';
 import AgendaEventos from '../components/AgendaEventos';
+import { API_URL } from '../config/api';
 
 export default function Calendarios() {
   const location = useLocation();
@@ -97,7 +98,6 @@ export default function Calendarios() {
   };
 
   const carreras = ['DER', 'ENF', 'GAS', 'ISC', 'NEG', 'NUT', 'PSCF', 'PSIC', 'VMK'];
-  const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
   const fechaActualStr = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
 

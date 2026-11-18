@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Swal from 'sweetalert2';
 import { useTime } from './TimeContext';
+import { API_URL } from '../config/api';
 
 export default function AgendarEventoModal({
   isOpen,
@@ -68,7 +69,6 @@ export default function AgendarEventoModal({
   const [guardandoPlantilla, setGuardandoPlantilla] = useState(false);
   const [eliminandoPlantilla, setEliminandoPlantilla] = useState(false);
 
-  const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
   const esNombreExclusivoPorDefecto = (nombre) => {
     const n = (nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
