@@ -531,8 +531,15 @@ def _enviar_smtp(correo_destino: str, asunto: str, html: str):
         "accessToken": private_key,
         "template_params": {
             "to_email": correo_destino,
+            "email": correo_destino,
+            "user_email": correo_destino,
+            "destinatario": correo_destino,
+            "correo": correo_destino,
             "asunto": asunto,
-            "html_content": html
+            "subject": asunto,
+            "html_content": html,
+            "message": html,
+            "mensaje": html,
         }
     }
 
@@ -7853,30 +7860,85 @@ async def enviar_examenes_por_correo(body: dict):
 # =========================================================================
 
 def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
-    """Envía un correo usando la configuración SMTP definida en .env o fallback."""
-    sender_email = os.getenv("SMTP_USER", "") or os.getenv("SMTP_FROM", "")
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    """Envía un correo usando SMTP directo (465/587), relay /api/send-email en Vercel o fallback EmailJS."""
+    import base64
+
+    dest_limpio = (correo_destino or "").strip()
+    if not dest_limpio or "@" not in dest_limpio:
+        return False
+
+    sender_email = (os.getenv("SMTP_USER", "") or os.getenv("SMTP_FROM", "") or "soporte.sipref.software@gmail.com").strip()
+    smtp_host = (os.getenv("SMTP_HOST", "") or "smtp.gmail.com").strip()
     smtp_port = int(os.getenv("SMTP_PORT", 587))
-    smtp_pass = os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "")
+    smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "") or "from lcxt muzd wugb").strip()
+
+    msg = MIMEMultipart()
+    msg['From'] = f"SIPREF ULA <{sender_email}>"
+    msg['To'] = dest_limpio
+    msg['Subject'] = asunto
+    msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+    raw_bytes = msg.as_bytes()
 
     if sender_email and smtp_pass:
+        # 1a. Intentar SMTP SSL 465
         try:
-            msg = MIMEMultipart()
-            msg['From'] = sender_email
-            msg['To'] = correo_destino
-            msg['Subject'] = asunto
-            msg.attach(MIMEText(html_content, 'html'))
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=8.0) as server:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=3.5) as server:
+                server.login(sender_email, smtp_pass)
+                server.sendmail(sender_email, [dest_limpio], raw_bytes)
+            return True
+        except Exception as e_465:
+            print(f"SMTP 465 no disponible ({e_465}), probando puerto {smtp_port}...")
+
+        # 1b. Intentar SMTP STARTTLS 587
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=3.5) as server:
                 server.starttls()
                 server.login(sender_email, smtp_pass)
-                server.sendmail(sender_email, [correo_destino], msg.as_string())
+                server.sendmail(sender_email, [dest_limpio], raw_bytes)
             return True
-        except Exception as e:
-            print(f"SMTP no disponible o falló ({e}), intentando EmailJS fallback...")
+        except Exception as e_587:
+            print(f"SMTP {smtp_port} no disponible ({e_587}), probando relay Vercel...")
 
-    # Fallback EmailJS
+    # 2. Relay serverless en Vercel (/api/send-email) cuando Render bloquea puertos SMTP salientes
+    relay_candidates = []
+    for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
+        val = (os.getenv(env_key, "") or "").strip()
+        if val:
+            base = val if val.startswith(("http://", "https://")) else f"https://{val}"
+            base = base.rstrip("/")
+            relay_candidates.append(base if base.endswith("/api/send-email") else f"{base}/api/send-email")
+    relay_candidates.extend([
+        "https://sipref-ula.vercel.app/api/send-email",
+        "https://sistema-sipref.vercel.app/api/send-email",
+    ])
+
+    relay_payload = json.dumps({
+        "raw_mime_b64": base64.b64encode(raw_bytes).decode("ascii"),
+        "recipients": [dest_limpio],
+        "from_email": sender_email,
+    }).encode("utf-8")
+
+    vistos_relay = set()
+    for r_url in relay_candidates:
+        if r_url in vistos_relay:
+            continue
+        vistos_relay.add(r_url)
+        try:
+            req_relay = urllib.request.Request(
+                r_url,
+                data=relay_payload,
+                headers={"Content-Type": "application/json", "User-Agent": "SIPREF-Backend/1.0"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req_relay, timeout=8.0) as resp:
+                if 200 <= resp.status < 300:
+                    return True
+        except Exception as e_rel:
+            print(f"Relay Vercel {r_url} no disponible: {e_rel}")
+
+    # 3. Fallback EmailJS
     try:
-        _enviar_smtp(correo_destino, asunto, html_content)
+        _enviar_smtp(dest_limpio, asunto, html_content)
         return True
     except Exception as e:
         print(f"Error en envío de correo fallback: {e}")
@@ -7973,6 +8035,227 @@ def _sincronizar_estados_eventos(cursor):
         print(f"Error sincronizando estados de eventos: {err}")
 
 
+def _construir_html_recordatorio_evento(
+    nombre_evento: str,
+    tipo_evento: str,
+    aula_nombre: str,
+    fecha_str: str,
+    hora_ini: str,
+    hora_f: str,
+    responsable: str,
+    descripcion: Optional[str] = None,
+    acomodo: Optional[str] = None,
+    sillas_panel: int = 0,
+) -> str:
+    desc_html = f"<p style='margin:6px 0;color:#475569;'><b>Descripción:</b> {descripcion}</p>" if descripcion else ""
+    acomodo_html = f"<p style='margin:6px 0;color:#475569;'>🪑 <b>Acomodo:</b> {acomodo}</p>" if acomodo else ""
+    panel_html = f"<p style='margin:6px 0;color:#475569;'>👥 <b>Sillas mesa panel:</b> {sillas_panel}</p>" if sillas_panel and int(sillas_panel) > 0 else ""
+    return f"""
+    <html><body style="font-family:'Segoe UI',Arial,sans-serif;background:#f4f6fb;padding:32px;margin:0;">
+      <div style="max-width:520px;margin:auto;background:#fff;border-radius:20px;padding:36px;box-shadow:0 8px 30px rgba(0,0,0,.07);border:1px solid #e2e8f0;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+          <div style="background:#1c355e;color:#fdbb11;font-weight:900;font-size:18px;padding:8px 14px;border-radius:12px;display:inline-block;">ULA</div>
+          <span style="color:#1c355e;font-size:20px;font-weight:800;vertical-align:middle;margin-left:8px;">SIPREF</span>
+        </div>
+        <h2 style="color:#1c355e;margin:0 0 6px 0;font-size:20px;">Recordatorio de Reserva de Aula</h2>
+        <p style="color:#64748b;font-size:13px;margin:0 0 24px 0;">Sistema de Gestión de Prefectura — Universidad Latino</p>
+
+        <div style="background:#f8fafc;border-left:4px solid #fdbb11;padding:20px;border-radius:12px;margin-bottom:24px;border:1px solid #e2e8f0;border-left-width:4px;">
+          <p style="margin:4px 0 10px 0;font-size:16px;color:#0e2045;font-weight:bold;">{nombre_evento} <span style="font-size:12px;background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:6px;font-weight:600;">{tipo_evento or 'Evento'}</span></p>
+          <p style="margin:6px 0;color:#334155;font-size:14px;">📍 <b>Aula / Espacio:</b> <strong style="color:#1c355e;">{aula_nombre}</strong></p>
+          <p style="margin:6px 0;color:#334155;font-size:14px;">📅 <b>Fecha:</b> {fecha_str}</p>
+          <p style="margin:6px 0;color:#334155;font-size:14px;">⏰ <b>Horario:</b> {hora_ini} - {hora_f} hrs</p>
+          <p style="margin:6px 0;color:#334155;font-size:14px;">👤 <b>Responsable:</b> {responsable}</p>
+          {acomodo_html}
+          {panel_html}
+          {desc_html}
+        </div>
+
+        <p style="color:#64748b;font-size:12px;line-height:1.5;margin:0 0 16px 0;">
+          Este recordatorio se genera automáticamente según la anticipación configurada en SIPREF.
+        </p>
+        <div style="border-top:1px solid #f1f5f9;padding-top:16px;text-align:center;">
+          <p style="color:#94a3b8;font-size:11px;margin:0;">© 2026 Universidad Latino · SIPREF Prefectura</p>
+        </div>
+      </div>
+    </body></html>
+    """
+
+
+def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
+    """Procesa recordatorios vencidos tanto de eventos_recordatorios (SIPREF) como de reservas_recordatorios (SIPREF Reservas)."""
+    now_str = _ahora_local().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 1. Recordatorios de SIPREF principal (eventos_recordatorios — hora local America/Merida)
+    cursor.execute("""
+        SELECT r.*, e.nombre_evento, e.tipo_evento, e.aula_nombre, e.fecha, 
+               e.hora_inicio, e.hora_fin, e.responsable, e.correo, e.descripcion,
+               e.acomodo_mobiliario, e.sillas_mesa_panel, e.estado as estado_evento
+        FROM eventos_recordatorios r
+        JOIN eventos_aulas e ON r.evento_id = e.id
+        WHERE r.estado = 'pendiente' 
+          AND r.fecha_programada <= %s
+          AND e.estado IN ('Programado', 'En curso')
+        LIMIT 20
+    """, (now_str,))
+    pendientes = cursor.fetchall() or []
+
+    for r in pendientes:
+        try:
+            cursor.execute("""
+                UPDATE eventos_recordatorios 
+                SET estado = 'procesando' 
+                WHERE id = %s AND estado = 'pendiente'
+            """, (r["id"],))
+            if cursor.rowcount == 0:
+                continue
+            connection.commit()
+
+            if r["tipo"] in ("correo", "ambos") and r.get("correo"):
+                fecha_str = str(r["fecha"])
+                if isinstance(r["fecha"], (date, datetime)):
+                    fecha_str = r["fecha"].strftime("%d/%m/%Y")
+
+                hora_ini = _formatear_hora_hhmm(r["hora_inicio"])
+                hora_f = _formatear_hora_hhmm(r["hora_fin"])
+                html_correo = _construir_html_recordatorio_evento(
+                    nombre_evento=r["nombre_evento"],
+                    tipo_evento=r.get("tipo_evento") or "Evento",
+                    aula_nombre=r["aula_nombre"],
+                    fecha_str=fecha_str,
+                    hora_ini=hora_ini,
+                    hora_f=hora_f,
+                    responsable=r["responsable"],
+                    descripcion=r.get("descripcion"),
+                    acomodo=r.get("acomodo_mobiliario"),
+                    sillas_panel=int(r.get("sillas_mesa_panel") or 0),
+                )
+
+                ok_envio = enviar_correo_generico(
+                    correo_destino=r["correo"],
+                    asunto=f"Recordatorio de evento: {r['nombre_evento']} — SIPREF",
+                    html_content=html_correo
+                )
+
+                if ok_envio:
+                    cursor.execute("UPDATE eventos_recordatorios SET estado = 'enviado', fecha_envio = NOW(), error_log = NULL WHERE id = %s", (r["id"],))
+                else:
+                    cursor.execute("UPDATE eventos_recordatorios SET estado = 'error', error_log = 'No se pudo entregar correo por SMTP ni fallback' WHERE id = %s", (r["id"],))
+            else:
+                cursor.execute("UPDATE eventos_recordatorios SET estado = 'enviado', fecha_envio = NOW(), error_log = NULL WHERE id = %s", (r["id"],))
+
+            connection.commit()
+        except Exception as e_rec:
+            print(f"Error procesando recordatorio {r['id']}: {e_rec}")
+            try:
+                cursor.execute("UPDATE eventos_recordatorios SET estado = 'error', error_log = %s WHERE id = %s", (str(e_rec)[:250], r["id"]))
+                connection.commit()
+            except Exception:
+                pass
+
+    # 2. Recordatorios de SIPREF Reservas (reservas_recordatorios — fechas en UTC)
+    try:
+        # Marcar como omitidos recordatorios viejos de reservaciones que ya terminaron hace más de 2 horas
+        cursor.execute("""
+            UPDATE reservas_recordatorios r
+            JOIN reservas_reservaciones rr ON r.reservacion_id = rr.id
+            SET r.intentos = 3,
+                r.ultimo_error = 'Evento finalizado antes de procesar recordatorio'
+            WHERE r.enviado_en IS NULL
+              AND COALESCE(r.intentos, 0) < 3
+              AND rr.fin < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
+        """)
+        connection.commit()
+
+        cursor.execute("""
+            SELECT r.id, r.reservacion_id, r.canal, r.anticipacion, r.unidad, r.intentos,
+                   rr.nombre_evento, rr.tipo_evento, rr.espacio_nombre, rr.espacio_id,
+                   rr.inicio, rr.fin, rr.responsable, rr.correo_responsable, rr.descripcion,
+                   rr.acomodo_mobiliario, rr.sillas_mesa_panel,
+                   ru.correo AS usuario_correo
+            FROM reservas_recordatorios r
+            JOIN reservas_reservaciones rr ON r.reservacion_id = rr.id
+            LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
+            WHERE r.enviado_en IS NULL
+              AND COALESCE(r.intentos, 0) < 3
+              AND r.enviar_en <= UTC_TIMESTAMP()
+              AND rr.estado = 'PROGRAMADA'
+              AND rr.fin >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
+            ORDER BY r.enviar_en ASC
+            LIMIT 20
+        """)
+        pendientes_res = cursor.fetchall() or []
+
+        for r in pendientes_res:
+            try:
+                intentos_prev = int(r.get("intentos") or 0)
+                cursor.execute("""
+                    UPDATE reservas_recordatorios
+                    SET intentos = %s
+                    WHERE id = %s AND enviado_en IS NULL AND COALESCE(intentos, 0) = %s
+                """, (intentos_prev + 1, r["id"], intentos_prev))
+                if cursor.rowcount == 0:
+                    continue
+                connection.commit()
+
+                canal_upper = str(r.get("canal") or "CORREO").upper()
+                correo_dest = (r.get("correo_responsable") or r.get("usuario_correo") or "").strip()
+
+                if canal_upper in ("CORREO", "EMAIL", "AMBOS") and correo_dest:
+                    ini_loc = _utc_a_local(r.get("inicio"))
+                    fin_loc = _utc_a_local(r.get("fin"))
+                    fecha_str = ini_loc.strftime("%d/%m/%Y") if ini_loc else ""
+                    hora_ini = ini_loc.strftime("%H:%M") if ini_loc else "00:00"
+                    hora_f = fin_loc.strftime("%H:%M") if fin_loc else "00:00"
+
+                    html_correo = _construir_html_recordatorio_evento(
+                        nombre_evento=r.get("nombre_evento") or "Reservación",
+                        tipo_evento=r.get("tipo_evento") or "Evento",
+                        aula_nombre=r.get("espacio_nombre") or r.get("espacio_id") or "",
+                        fecha_str=fecha_str,
+                        hora_ini=hora_ini,
+                        hora_f=hora_f,
+                        responsable=r.get("responsable") or "",
+                        descripcion=r.get("descripcion"),
+                        acomodo=r.get("acomodo_mobiliario"),
+                        sillas_panel=int(r.get("sillas_mesa_panel") or 0),
+                    )
+
+                    ok_envio = enviar_correo_generico(
+                        correo_destino=correo_dest,
+                        asunto=f"Recordatorio de evento: {r.get('nombre_evento') or 'Reservación'} — SIPREF Reservas",
+                        html_content=html_correo,
+                    )
+                    if ok_envio:
+                        cursor.execute(
+                            "UPDATE reservas_recordatorios SET enviado_en = UTC_TIMESTAMP(), ultimo_error = NULL WHERE id = %s",
+                            (r["id"],),
+                        )
+                    else:
+                        cursor.execute(
+                            "UPDATE reservas_recordatorios SET ultimo_error = 'No se pudo entregar correo por SMTP ni fallback' WHERE id = %s",
+                            (r["id"],),
+                        )
+                else:
+                    cursor.execute(
+                        "UPDATE reservas_recordatorios SET enviado_en = UTC_TIMESTAMP(), ultimo_error = NULL WHERE id = %s",
+                        (r["id"],),
+                    )
+                connection.commit()
+            except Exception as e_rr:
+                print(f"Error procesando recordatorio de SIPREF Reservas {r['id']}: {e_rr}")
+                try:
+                    cursor.execute(
+                        "UPDATE reservas_recordatorios SET ultimo_error = %s WHERE id = %s",
+                        (str(e_rr)[:250], r["id"]),
+                    )
+                    connection.commit()
+                except Exception:
+                    pass
+    except Exception as e_outer:
+        print(f"Advertencia procesando reservas_recordatorios: {e_outer}")
+
+
 async def worker_procesar_recordatorios():
     """Worker asíncrono en segundo plano para procesar recordatorios programados en BD y mantener estados sincronizados."""
     while True:
@@ -7981,98 +8264,12 @@ async def worker_procesar_recordatorios():
             with connection.cursor() as cursor:
                 _sincronizar_estados_eventos(cursor)
                 connection.commit()
-
-                now_str = _ahora_local().strftime("%Y-%m-%d %H:%M:%S")
-                cursor.execute("""
-                    SELECT r.*, e.nombre_evento, e.tipo_evento, e.aula_nombre, e.fecha, 
-                           e.hora_inicio, e.hora_fin, e.responsable, e.correo, e.descripcion, e.estado as estado_evento
-                    FROM eventos_recordatorios r
-                    JOIN eventos_aulas e ON r.evento_id = e.id
-                    WHERE r.estado = 'pendiente' 
-                      AND r.fecha_programada <= %s
-                      AND e.estado IN ('Programado', 'En curso')
-                    LIMIT 20
-                """, (now_str,))
-                pendientes = cursor.fetchall()
-
-                for r in pendientes:
-                    try:
-                        # Bloqueo atómico para evitar envíos duplicados concurrentes
-                        cursor.execute("""
-                            UPDATE eventos_recordatorios 
-                            SET estado = 'procesando' 
-                            WHERE id = %s AND estado = 'pendiente'
-                        """, (r["id"],))
-                        if cursor.rowcount == 0:
-                            continue
-                        connection.commit()
-
-                        if r["tipo"] in ("correo", "ambos") and r.get("correo"):
-                            fecha_str = str(r["fecha"])
-                            if isinstance(r["fecha"], (date, datetime)):
-                                fecha_str = r["fecha"].strftime("%d/%m/%Y")
-
-                            hora_ini = str(r["hora_inicio"])[:5]
-                            hora_f = str(r["hora_fin"])[:5]
-                            desc_html = f"<p style='margin:6px 0;color:#475569;'><b>Descripción:</b> {r['descripcion']}</p>" if r.get('descripcion') else ""
-
-                            html_correo = f"""
-                            <html><body style="font-family:'Segoe UI',Arial,sans-serif;background:#f4f6fb;padding:32px;margin:0;">
-                              <div style="max-width:520px;margin:auto;background:#fff;border-radius:20px;padding:36px;box-shadow:0 8px 30px rgba(0,0,0,.07);border:1px solid #e2e8f0;">
-                                <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-                                  <div style="background:#1c355e;color:#fdbb11;font-weight:900;font-size:18px;padding:8px 14px;border-radius:12px;display:inline-block;">ULA</div>
-                                  <span style="color:#1c355e;font-size:20px;font-weight:800;vertical-align:middle;margin-left:8px;">SIPREF</span>
-                                </div>
-                                <h2 style="color:#1c355e;margin:0 0 6px 0;font-size:20px;">Recordatorio de Reserva de Aula</h2>
-                                <p style="color:#64748b;font-size:13px;margin:0 0 24px 0;">Sistema de Gestión de Prefectura — Universidad Latino</p>
-
-                                <div style="background:#f8fafc;border-left:4px solid #fdbb11;padding:20px;border-radius:12px;margin-bottom:24px;border:1px solid #e2e8f0;border-left-width:4px;">
-                                  <p style="margin:4px 0 10px 0;font-size:16px;color:#0e2045;font-weight:bold;">{r['nombre_evento']} <span style="font-size:12px;background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:6px;font-weight:600;">{r['tipo_evento']}</span></p>
-                                  <p style="margin:6px 0;color:#334155;font-size:14px;">📍 <b>Aula Asignada:</b> <strong style="color:#1c355e;">{r['aula_nombre']}</strong></p>
-                                  <p style="margin:6px 0;color:#334155;font-size:14px;">📅 <b>Fecha:</b> {fecha_str}</p>
-                                  <p style="margin:6px 0;color:#334155;font-size:14px;">⏰ <b>Horario:</b> {hora_ini} - {hora_f} hrs</p>
-                                  <p style="margin:6px 0;color:#334155;font-size:14px;">👤 <b>Responsable:</b> {r['responsable']}</p>
-                                  {desc_html}
-                                </div>
-
-                                <p style="color:#64748b;font-size:12px;line-height:1.5;margin:0 0 16px 0;">
-                                  Este recordatorio se genera automáticamente según la anticipación configurada en SIPREF.
-                                </p>
-                                <div style="border-top:1px solid #f1f5f9;padding-top:16px;text-align:center;">
-                                  <p style="color:#94a3b8;font-size:11px;margin:0;">© 2026 Universidad Latino · SIPREF Prefectura</p>
-                                </div>
-                              </div>
-                            </body></html>
-                            """
-
-                            ok_envio = enviar_correo_generico(
-                                correo_destino=r["correo"],
-                                asunto=f"Recordatorio de evento: {r['nombre_evento']} — SIPREF",
-                                html_content=html_correo
-                            )
-
-                            if ok_envio:
-                                cursor.execute("UPDATE eventos_recordatorios SET estado = 'enviado', fecha_envio = NOW(), error_log = NULL WHERE id = %s", (r["id"],))
-                            else:
-                                cursor.execute("UPDATE eventos_recordatorios SET estado = 'error', error_log = 'No se pudo entregar correo por SMTP ni fallback' WHERE id = %s", (r["id"],))
-                        else:
-                            # Notificación interna en SIPREF
-                            cursor.execute("UPDATE eventos_recordatorios SET estado = 'enviado', fecha_envio = NOW(), error_log = NULL WHERE id = %s", (r["id"],))
-
-                        connection.commit()
-                    except Exception as e_rec:
-                        print(f"Error procesando recordatorio {r['id']}: {e_rec}")
-                        try:
-                            cursor.execute("UPDATE eventos_recordatorios SET estado = 'error', error_log = %s WHERE id = %s", (str(e_rec)[:250], r["id"]))
-                            connection.commit()
-                        except Exception:
-                            pass
-
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
             connection.close()
-        except Exception as e:
+        except Exception:
             pass
 
-        await asyncio.sleep(20)
+        await asyncio.sleep(15)
 
 
 class RecordatorioSchema(BaseModel):
@@ -8294,6 +8491,10 @@ def api_verificar_disponibilidad(req: DisponibilidadReqSchema):
         with connection.cursor() as cursor:
             _sincronizar_estados_eventos(cursor)
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
             disp, motivo = _verificar_disponibilidad_interna(
                 cursor, req.aula_nombre, req.fecha, req.hora_inicio, req.hora_fin, req.evento_id
             )
@@ -8309,6 +8510,10 @@ def api_crear_evento(data: EventoCreateSchema):
         with connection.cursor() as cursor:
             _sincronizar_estados_eventos(cursor)
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
 
             disp, motivo = _verificar_disponibilidad_interna(
                 cursor, data.aula_nombre, data.fecha, data.hora_inicio, data.hora_fin
@@ -8353,6 +8558,10 @@ def api_crear_evento(data: EventoCreateSchema):
             """, (evento_id, data.usuario_creador or "Prefectura", f"Evento '{data.nombre_evento}' agendado para el aula {data.aula_nombre} el {data.fecha} de {data.hora_inicio[:5]} a {data.hora_fin[:5]}."))
 
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
             return {"success": True, "id": evento_id, "message": "Evento agendado exitosamente."}
     finally:
         connection.close()
@@ -8511,6 +8720,10 @@ def api_listar_eventos(
         with connection.cursor() as cursor:
             _sincronizar_estados_eventos(cursor)
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
 
             query = "SELECT * FROM eventos_aulas WHERE 1=1"
             params = []
@@ -8587,6 +8800,10 @@ def _consultar_eventos_db(
         with connection.cursor() as cursor:
             _sincronizar_estados_eventos(cursor)
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
 
             query = "SELECT * FROM eventos_aulas WHERE 1=1"
             params = []
@@ -9070,6 +9287,10 @@ def api_eventos_hoy():
         with connection.cursor() as cursor:
             _sincronizar_estados_eventos(cursor)
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
 
             today_str = _ahora_local().strftime("%Y-%m-%d")
             cursor.execute("""
@@ -9100,6 +9321,10 @@ def api_eventos_notificaciones_activas():
         with connection.cursor() as cursor:
             _sincronizar_estados_eventos(cursor)
             connection.commit()
+            try:
+                _procesar_recordatorios_pendientes_una_vez(cursor, connection)
+            except Exception:
+                pass
 
             today_str = _ahora_local().strftime("%Y-%m-%d")
             cursor.execute("""
