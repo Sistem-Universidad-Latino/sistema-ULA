@@ -58,6 +58,8 @@ def migrar_columnas_verificacion():
                 "ALTER TABLE aulas ADD COLUMN fin_mantenimiento DATETIME NULL",
                 "ALTER TABLE aulas ADD COLUMN aula_temporal VARCHAR(100) NULL",
                 "ALTER TABLE aulas ADD COLUMN es_exclusiva_reservas BOOLEAN NOT NULL DEFAULT FALSE",
+                "ALTER TABLE eventos_aulas ADD COLUMN acomodo_mobiliario VARCHAR(255) NULL",
+                "ALTER TABLE eventos_aulas ADD COLUMN sillas_mesa_panel INT NOT NULL DEFAULT 0",
                 "ALTER TABLE usuarios ADD COLUMN verification_code_expira DATETIME NULL",
                 "ALTER TABLE usuarios ADD COLUMN reset_code_expira DATETIME NULL",
                 "ALTER TABLE usuarios ADD COLUMN created_at DATETIME DEFAULT NOW()",
@@ -8272,6 +8274,8 @@ class EventoCreateSchema(BaseModel):
     responsable: str
     correo: str
     descripcion: Optional[str] = ""
+    acomodo_mobiliario: Optional[str] = ""
+    sillas_mesa_panel: Optional[int] = 0
     usuario_creador: Optional[str] = "Prefectura"
     recordatorios: Optional[List[RecordatorioSchema]] = []
     recursos: Optional[List[EventoRecursoSchema]] = []
@@ -8287,6 +8291,8 @@ class EventoUpdateSchema(BaseModel):
     responsable: Optional[str] = None
     correo: Optional[str] = None
     descripcion: Optional[str] = None
+    acomodo_mobiliario: Optional[str] = None
+    sillas_mesa_panel: Optional[int] = None
     usuario_modificador: Optional[str] = "Prefectura"
     recordatorios: Optional[List[RecordatorioSchema]] = None
     recursos: Optional[List[EventoRecursoSchema]] = None
@@ -8482,14 +8488,17 @@ def api_crear_evento(data: EventoCreateSchema):
 
             estado_inicial = _calcular_estado_evento(data.fecha, data.hora_inicio, data.hora_fin)
 
+            acomodo_limpio = (data.acomodo_mobiliario or "").strip()[:255] or None
+            sillas_panel_limpio = max(0, int(data.sillas_mesa_panel or 0))
+
             cursor.execute("""
                 INSERT INTO eventos_aulas 
-                (tipo_evento, nombre_evento, aula_nombre, fecha, hora_inicio, hora_fin, responsable, correo, descripcion, usuario_creador, estado)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (tipo_evento, nombre_evento, aula_nombre, fecha, hora_inicio, hora_fin, responsable, correo, descripcion, acomodo_mobiliario, sillas_mesa_panel, usuario_creador, estado)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 data.tipo_evento, data.nombre_evento, data.aula_nombre, data.fecha,
                 data.hora_inicio, data.hora_fin, data.responsable, data.correo,
-                data.descripcion, data.usuario_creador, estado_inicial
+                data.descripcion, acomodo_limpio, sillas_panel_limpio, data.usuario_creador, estado_inicial
             ))
             evento_id = cursor.lastrowid
 
@@ -8563,6 +8572,8 @@ def _mapear_reserva_a_evento(res: Dict[str, Any]) -> Dict[str, Any]:
         "responsable": res.get("responsable") or "",
         "correo": res.get("correo_responsable") or "",
         "descripcion": res.get("descripcion") or "",
+        "acomodo_mobiliario": res.get("acomodo_mobiliario") or "",
+        "sillas_mesa_panel": int(res.get("sillas_mesa_panel") or 0),
         "usuario_creador": res.get("usuario_creador_nombre") or res.get("creado_por") or "SIPREF Reservas",
         "usuario_creador_correo": res.get("usuario_creador_correo") or res.get("correo_responsable") or "",
         "estado": estado_sipref,
@@ -9432,10 +9443,26 @@ def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
             else:
                 nuevo_estado = "Cancelado"
 
+            nuevo_acomodo = (
+                (data.acomodo_mobiliario or "").strip()[:255] or None
+                if data.acomodo_mobiliario is not None
+                else actual.get("acomodo_mobiliario")
+            )
+            nuevo_sillas_panel = (
+                max(0, int(data.sillas_mesa_panel or 0))
+                if data.sillas_mesa_panel is not None
+                else int(actual.get("sillas_mesa_panel") or 0)
+            )
+            if (nuevo_acomodo or "") != (actual.get("acomodo_mobiliario") or ""):
+                cambios.append("Acomodo de mobiliario actualizado")
+            if nuevo_sillas_panel != int(actual.get("sillas_mesa_panel") or 0):
+                cambios.append(f"Sillas mesa panel: {nuevo_sillas_panel}")
+
             cursor.execute("""
                 UPDATE eventos_aulas SET 
                   tipo_evento = %s, nombre_evento = %s, aula_nombre = %s, fecha = %s,
                   hora_inicio = %s, hora_fin = %s, responsable = %s, correo = %s, descripcion = %s,
+                  acomodo_mobiliario = %s, sillas_mesa_panel = %s,
                   estado = %s
                 WHERE id = %s
             """, (
@@ -9445,6 +9472,8 @@ def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
                 data.responsable or actual["responsable"],
                 data.correo or actual["correo"],
                 data.descripcion if data.descripcion is not None else actual["descripcion"],
+                nuevo_acomodo,
+                nuevo_sillas_panel,
                 nuevo_estado,
                 evento_id
             ))

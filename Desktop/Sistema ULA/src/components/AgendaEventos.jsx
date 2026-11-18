@@ -1226,6 +1226,23 @@ export default function AgendaEventos({ aulasList = [] }) {
               </div>
             )}
 
+            {(eventoDetalle.acomodo_mobiliario || Number(eventoDetalle.sillas_mesa_panel) > 0) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                {eventoDetalle.acomodo_mobiliario && (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-0.5">
+                    <p className="text-slate-400 font-bold uppercase text-[10px]">Acomodo de mesas y sillas</p>
+                    <p className="font-semibold text-slate-800">{eventoDetalle.acomodo_mobiliario}</p>
+                  </div>
+                )}
+                {Number(eventoDetalle.sillas_mesa_panel) > 0 && (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-0.5">
+                    <p className="text-slate-400 font-bold uppercase text-[10px]">Sillas para mesa panel</p>
+                    <p className="font-bold text-[#1c355e]">{eventoDetalle.sillas_mesa_panel} sillas</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* SECCIÓN RECORDATORIOS */}
             <div className="space-y-2 text-xs">
               <p className="text-slate-400 font-bold uppercase text-[10px]">Recordatorios Configurados</p>

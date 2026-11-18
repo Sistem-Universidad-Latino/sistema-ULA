@@ -20,7 +20,9 @@ export default function AgendarEventoModal({
     hora_fin: '11:00',
     responsable: '',
     correo: '',
-    descripcion: ''
+    descripcion: '',
+    acomodo_mobiliario: '',
+    sillas_mesa_panel: ''
   });
 
   const [recordatorios, setRecordatorios] = useState([
@@ -122,7 +124,9 @@ export default function AgendarEventoModal({
       hora_fin: '12:00',
       responsable: '',
       correo: '',
-      descripcion: ''
+      descripcion: '',
+      acomodo_mobiliario: '',
+      sillas_mesa_panel: ''
     });
     setRecordatorios([
       { tipo: 'sipref', antencion_valor: 30, antencion_unidad: 'minutos' },
@@ -149,7 +153,9 @@ export default function AgendarEventoModal({
         hora_fin: eventoAEditar.hora_fin ? String(eventoAEditar.hora_fin).slice(0, 5) : '11:00',
         responsable: eventoAEditar.responsable || '',
         correo: eventoAEditar.correo || '',
-        descripcion: eventoAEditar.descripcion || ''
+        descripcion: eventoAEditar.descripcion || '',
+        acomodo_mobiliario: eventoAEditar.acomodo_mobiliario || '',
+        sillas_mesa_panel: Number(eventoAEditar.sillas_mesa_panel) > 0 ? String(eventoAEditar.sillas_mesa_panel) : ''
       });
       if (Array.isArray(eventoAEditar.recordatorios) && eventoAEditar.recordatorios.length > 0) {
         setRecordatorios(eventoAEditar.recordatorios.map(r => ({
@@ -323,6 +329,7 @@ export default function AgendarEventoModal({
 
       const payload = {
         ...formData,
+        sillas_mesa_panel: Math.max(0, parseInt(formData.sillas_mesa_panel, 10) || 0),
         usuario_creador: usuarioLogueado,
         recordatorios: recordatorios,
         recursos: recursosPayload
@@ -377,10 +384,33 @@ export default function AgendarEventoModal({
 
   const cambiarCantidadEnMapa = (setter, recursoId, delta) => {
     setter(prev => {
-      const actual = prev[recursoId] || 1;
+      const actual = Number(prev[recursoId]) || 1;
       return {
         ...prev,
         [recursoId]: Math.max(1, actual + delta)
+      };
+    });
+  };
+
+  const establecerCantidadEnMapa = (setter, recursoId, rawVal) => {
+    setter(prev => {
+      if (rawVal === '') {
+        return { ...prev, [recursoId]: '' };
+      }
+      const parsed = parseInt(rawVal, 10);
+      return {
+        ...prev,
+        [recursoId]: Number.isNaN(parsed) ? 1 : Math.max(1, parsed)
+      };
+    });
+  };
+
+  const normalizarCantidadEnMapa = (setter, recursoId) => {
+    setter(prev => {
+      const parsed = parseInt(prev[recursoId], 10);
+      return {
+        ...prev,
+        [recursoId]: !parsed || parsed < 1 ? 1 : parsed
       };
     });
   };
@@ -773,9 +803,15 @@ export default function AgendarEventoModal({
                   >
                     −
                   </button>
-                  <span className="px-2 py-1 font-extrabold text-[#1c355e] min-w-[24px] text-center">
-                    {cantidad}
-                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={cantidad}
+                    onChange={(e) => establecerCantidadEnMapa(setter, rec.id, e.target.value)}
+                    onBlur={() => normalizarCantidadEnMapa(setter, rec.id)}
+                    aria-label={`Cantidad de ${rec.nombre}`}
+                    className="w-12 px-1 py-1 font-extrabold text-[#1c355e] text-center bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
                   <button
                     type="button"
                     onClick={() => cambiarCantidadEnMapa(setter, rec.id, 1)}
@@ -1153,11 +1189,67 @@ export default function AgendarEventoModal({
                 </div>
               </div>
             )}
+
+                {/* ACOMODO DE MESAS Y SILLAS + MESA PANEL */}
+                <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-[#1c355e] flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-base">chair</span>
+                      Acomodo de mesas, sillas y mesa panel
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {['Auditorio', 'Tipo Escuela', 'Herradura / U', 'Mesa Redonda'].map((tipo) => (
+                        <button
+                          key={tipo}
+                          type="button"
+                          onClick={() => setFormData(prev => ({ ...prev, acomodo_mobiliario: tipo }))}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
+                            formData.acomodo_mobiliario === tipo
+                              ? 'bg-[#1c355e] text-white border-[#1c355e]'
+                              : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-[#1c355e]/40'
+                          }`}
+                        >
+                          {tipo}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                        ¿Cómo se acomodarán las mesas y sillas? <span className="text-slate-400 font-normal">(Opcional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={255}
+                        placeholder="Ej. Auditorio con 4 mesas al frente y pasillo central"
+                        value={formData.acomodo_mobiliario}
+                        onChange={(e) => setFormData(prev => ({ ...prev, acomodo_mobiliario: e.target.value }))}
+                        className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                        Sillas para mesa panel
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={formData.sillas_mesa_panel}
+                        onChange={(e) => setFormData(prev => ({ ...prev, sillas_mesa_panel: e.target.value }))}
+                        className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:bg-white focus:ring-2 focus:ring-[#1c355e]/20 outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
               </>
             )}
 
             <p className="text-[11px] text-slate-500 font-medium pt-1">
               Resumen: {textoResumenMateriales}
+              {Number(formData.sillas_mesa_panel) > 0 ? ` • ${formData.sillas_mesa_panel} sillas mesa panel` : ''}
+              {formData.acomodo_mobiliario?.trim() ? ` • Acomodo: ${formData.acomodo_mobiliario.trim()}` : ''}
             </p>
           </div>
 
