@@ -2506,49 +2506,6 @@ def importar_texto_eventos(datos: TextoEventosInput):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/calendario-institucional/evento")
-def crear_evento_institucional(evento: EventoCalendarioInput):
-    """Crea un evento individual con deduplicacion automatica."""
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("""SELECT id, descripcion FROM calendario_institucional
-                WHERE plan=%s AND ciclo=%s AND periodo=%s AND fecha_inicio=%s AND fecha_fin=%s LIMIT 1""",
-                (evento.plan, evento.ciclo, evento.periodo, evento.fecha_inicio, evento.fecha_fin))
-            existente = cursor.fetchone()
-            if existente:
-                if evento.descripcion not in existente['descripcion']:
-                    nueva_desc = f"{existente['descripcion']} | {evento.descripcion}"
-                    cursor.execute("UPDATE calendario_institucional SET descripcion=%s WHERE id=%s", (nueva_desc, existente['id']))
-                    connection.commit()
-                    return {"message": "Evento existente actualizado (descripciones combinadas)", "id": existente['id'], "combinado": True}
-                return {"message": "El evento ya existe", "id": existente['id'], "duplicado": True}
-            cursor.execute("""INSERT INTO calendario_institucional (plan,ciclo,periodo,tipo_evento,descripcion,fecha_inicio,fecha_fin,suspende_clases)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (evento.plan, evento.ciclo, evento.periodo, evento.tipo_evento, evento.descripcion, evento.fecha_inicio, evento.fecha_fin, evento.suspende_clases))
-        connection.commit()
-        return {"message": "Evento creado exitosamente", "id": cursor.lastrowid}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        connection.close()
-
-
-@app.delete("/api/calendario-institucional/evento/{evento_id}")
-def eliminar_evento_institucional(evento_id: int):
-    """Elimina un evento del calendario institucional."""
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM calendario_institucional WHERE id=%s", (evento_id,))
-        connection.commit()
-        return {"message": "Evento eliminado"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        connection.close()
-
-
 @app.get("/api/calendario-institucional/deduplicado")
 def obtener_eventos_deduplicados(plan: str = "semestral", ciclo: str = ""):
     """Retorna los eventos del calendario institucional deduplicados por fecha."""
@@ -4287,125 +4244,6 @@ def eliminar_aula(aula_id: int, request: Request):
         connection.close()
 
 
-# ---------------------------------------------------------
-# ENDPOINTS PARA GESTIÓN DE ARCHIVOS PDF
-# ---------------------------------------------------------
-@app.get("/api/archivos")
-def obtener_archivos():
-    """
-    Obtiene lista de archivos únicos y estadísticas de los horarios
-    """
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT DISTINCT archivo, 
-                       COUNT(*) as total_horarios,
-                       MIN(fecha_creacion) as fecha_carga,
-                       MAX(fecha_creacion) as ultima_modificacion,
-                       COUNT(CASE WHEN aula_asignada != 'Por asignar' THEN 1 END) as aulas_asignadas,
-                       GROUP_CONCAT(DISTINCT CASE WHEN aula_asignada != 'Por asignar' AND TRIM(aula_asignada) != '' THEN aula_asignada END SEPARATOR ', ') as aulas_ocupadas,
-                       GROUP_CONCAT(horario SEPARATOR '|') as todos_horarios,
-                       MAX(NULLIF(TRIM(cuatrimestre), '')) as tiene_cuatri,
-                       MAX(NULLIF(TRIM(semestre), '')) as tiene_semestre
-                FROM horarios 
-                GROUP BY archivo 
-                ORDER BY fecha_carga DESC
-            """)
-            archivos = cursor.fetchall()
-            
-        LIMITE_VESPERTINO = 14 * 60 # 14:00
-        for arch in (archivos or []):
-            turnos = set()
-            min_inicio = None
-            max_fin = None
-            if arch.get('todos_horarios'):
-                horarios_lista = arch['todos_horarios'].split('|')
-                for h in horarios_lista:
-                    _, inicio, fin = _parse_horario_minutos(h)
-                    if inicio is not None:
-                        if min_inicio is None or inicio < min_inicio:
-                            min_inicio = inicio
-                        if fin is not None and (max_fin is None or fin > max_fin):
-                            max_fin = fin
-                        if inicio < LIMITE_VESPERTINO:
-                            turnos.add("Matutino")
-                        else:
-                            turnos.add("Vespertino")
-                    matches = re.findall(r'(\d{1,2}):(\d{2})\s*[-aA–—]\s*(\d{1,2}):(\d{2})', h)
-                    for m_match in matches:
-                        h_i, m_i, h_f, m_f = map(int, m_match)
-                        st_m = h_i * 60 + m_i
-                        en_m = h_f * 60 + m_f
-                        if min_inicio is None or st_m < min_inicio:
-                            min_inicio = st_m
-                        if max_fin is None or en_m > max_fin:
-                            max_fin = en_m
-                        if st_m < LIMITE_VESPERTINO:
-                            turnos.add("Matutino")
-                        else:
-                            turnos.add("Vespertino")
-
-            if min_inicio is not None and max_fin is not None:
-                h_i, m_i = min_inicio // 60, min_inicio % 60
-                h_f, m_f = max_fin // 60, max_fin % 60
-                arch['rango_horario'] = f"{h_i}:{m_i:02d} a {h_f}:{m_f:02d}"
-            else:
-                arch['rango_horario'] = None
-
-            if "Matutino" in turnos and "Vespertino" in turnos:
-                arch['turno'] = "Ambos Turnos"
-            elif "Matutino" in turnos:
-                arch['turno'] = "Matutino"
-            elif "Vespertino" in turnos:
-                arch['turno'] = "Vespertino"
-            else:
-                arch['turno'] = "Sin horario fijo"
-            
-            # Determinar el plan (Semestral o Cuatrimestral)
-            if arch.get('tiene_cuatri') and arch.get('tiene_semestre'):
-                arch['plan'] = 'Mixto'
-            elif arch.get('tiene_cuatri'):
-                arch['plan'] = 'Cuatrimestral'
-            elif arch.get('tiene_semestre'):
-                arch['plan'] = 'Semestral'
-            else:
-                arch['plan'] = 'No definido'
-                
-            # Limpiar campos pesados/innecesarios antes de devolver
-            if 'todos_horarios' in arch: del arch['todos_horarios']
-            if 'tiene_cuatri' in arch: del arch['tiene_cuatri']
-            if 'tiene_semestre' in arch: del arch['tiene_semestre']
-
-        return archivos if archivos else []
-    except pymysql.Error as e:
-        raise HTTPException(status_code=500, detail=f"Error al obtener archivos: {str(e)}")
-    finally:
-        connection.close()
-
-
-@app.get("/api/archivos/{nombre_archivo}/horarios")
-def obtener_horarios_archivo(nombre_archivo: str):
-    """
-    Obtiene todos los horarios de un archivo específico
-    """
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT id, docente, licenciatura, asignatura, horario, aula_asignada, fecha_creacion, semestre, cuatrimestre, grupo
-                FROM horarios 
-                WHERE archivo = %s
-                ORDER BY horario
-            """, (nombre_archivo,))
-            horarios = cursor.fetchall()
-        return horarios if horarios else []
-    except pymysql.Error as e:
-        raise HTTPException(status_code=500, detail=f"Error al obtener horarios: {str(e)}")
-    finally:
-        connection.close()
-
-
 @app.put("/api/horarios/{horario_id}")
 def actualizar_horario(horario_id: int, datos: dict, request: Request):
     """Actualiza un horario específico (aula, docente, asignatura, horario/día/hora). Valida conflictos de aula."""
@@ -4578,28 +4416,6 @@ def renombrar_archivo(nombre_archivo: str, datos: dict, request: Request):
         raise
     except pymysql.Error as e:
         raise HTTPException(status_code=500, detail=f"Error al renombrar archivo: {str(e)}")
-    finally:
-        connection.close()
-
-
-@app.delete("/api/archivos/{nombre_archivo}")
-def eliminar_archivo(nombre_archivo: str, request: Request):
-    """
-    Elimina un archivo y todos sus horarios asociados
-    """
-    connection = get_db_connection()
-    try:
-        with connection.cursor() as cursor:
-            usuario = obtener_usuario(request)
-            cursor.execute("DELETE FROM horarios WHERE archivo = %s", (nombre_archivo,))
-            registrar_bitacora(
-                cursor, usuario, 'eliminar_archivo_horarios', 'horarios',
-                datos_anteriores={"archivo": nombre_archivo}
-            )
-        connection.commit()
-        return {"message": f"Archivo '{nombre_archivo}' y sus horarios eliminados exitosamente"}
-    except pymysql.Error as e:
-        raise HTTPException(status_code=500, detail=f"Error al eliminar archivo: {str(e)}")
     finally:
         connection.close()
 
