@@ -808,11 +808,11 @@ export default function AgendarEventoModal({
   const cantidadMaterialesPlantilla = Object.keys(plantillaFormRecursos).length;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl p-6 sm:p-8 w-full max-w-2xl shadow-2xl border border-slate-100 my-8">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-[70] p-3 sm:p-5">
+      <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden shadow-2xl border border-slate-100">
         
         {/* CABECERA MODAL */}
-        <div className="flex justify-between items-center pb-4 border-b border-slate-100 mb-6">
+        <div className="shrink-0 flex justify-between items-center px-6 sm:px-8 pt-6 pb-4 border-b border-slate-100 bg-white">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#1c355e]/10 text-[#1c355e] flex items-center justify-center">
               <span className="material-symbols-outlined text-2xl">event_available</span>
@@ -827,25 +827,27 @@ export default function AgendarEventoModal({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
+            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
           >
             <span className="material-symbols-outlined text-xl">close</span>
           </button>
         </div>
 
-        {/* ALERTA ERROR DE DISPONIBILIDAD */}
-        {errorDisponibilidad && (
-          <div className="mb-6 p-4 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-800 animate-fadeIn">
-            <span className="material-symbols-outlined text-red-600 text-2xl mt-0.5">error</span>
-            <div className="flex-1 text-sm">
-              <p className="font-bold text-red-900">Reserva Bloqueada — Aula Ocupada</p>
-              <p className="mt-0.5 font-medium">{errorDisponibilidad}</p>
-            </div>
-          </div>
-        )}
+        <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-5 space-y-6">
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+            {/* ALERTA ERROR DE DISPONIBILIDAD */}
+            {errorDisponibilidad && (
+              <div className="p-4 rounded-2xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-800 animate-fadeIn">
+                <span className="material-symbols-outlined text-red-600 text-2xl mt-0.5">error</span>
+                <div className="flex-1 text-sm">
+                  <p className="font-bold text-red-900">Reserva Bloqueada — Aula Ocupada</p>
+                  <p className="mt-0.5 font-medium">{errorDisponibilidad}</p>
+                </div>
+              </div>
+            )}
 
           {/* BARRA RÁPIDA DE PLANTILLA DE EVENTO */}
           <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200/80 space-y-2.5">
@@ -1244,8 +1246,10 @@ export default function AgendarEventoModal({
             )}
           </div>
 
+          </div>
+
           {/* BOTONES ACCIÓN */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-100">
+          <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 px-6 sm:px-8 py-4 border-t border-slate-100 bg-slate-50/70">
             <button
               type="button"
               onClick={handleLimpiarTodo}
@@ -1288,8 +1292,8 @@ export default function AgendarEventoModal({
 
       {/* SUBMODAL CREAR / EDITAR PLANTILLA DE EVENTO */}
       {mostrarModalPlantilla && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[60] p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-xl shadow-2xl border border-slate-100 my-8 space-y-5">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-[80] p-3 sm:p-5">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-100 space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-[#1c355e]/10 text-[#1c355e] flex items-center justify-center">
