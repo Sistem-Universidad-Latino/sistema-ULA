@@ -124,44 +124,44 @@ export default function GestionAulas() {
     fetchEstado();
   }, [hoyStr]);
 
-  const fetchAulas = async () => {
+  const fetchAulas = async (signal) => {
     try {
-      const r = await fetch('/api/aulas');
+      const r = await fetch('/api/aulas', signal ? { signal } : undefined);
       if (r.ok) setAulas(await r.json());
-    } catch (e) { console.error("Error al cargar aulas:", e); }
+    } catch (e) { if (e?.name !== 'AbortError') console.error("Error al cargar aulas:", e); }
   };
 
-  const fetchOcupacion = async () => {
+  const fetchOcupacion = async (signal) => {
     try {
-      const r = await fetch('/api/aulas/ocupacion');
+      const r = await fetch('/api/aulas/ocupacion', signal ? { signal } : undefined);
       if (r.ok) setOcupacion(await r.json());
-    } catch (e) { console.error("Error al cargar ocupación:", e); }
+    } catch (e) { if (e?.name !== 'AbortError') console.error("Error al cargar ocupación:", e); }
     finally { setCargando(false); }
   };
 
-  const fetchClasesAhora = async (t) => {
+  const fetchClasesAhora = async (t, signal) => {
     const ref = t || ahora;
     const dia  = ref.getDay();
     const mins = ref.getHours() * 60 + ref.getMinutes();
     const refFechaStr = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}-${String(ref.getDate()).padStart(2, '0')}`;
     try {
-      const r = await fetch(`/api/clases-hoy?dia=${dia}&mins=${mins}&fecha=${refFechaStr}`);
+      const r = await fetch(`/api/clases-hoy?dia=${dia}&mins=${mins}&fecha=${refFechaStr}`, signal ? { signal } : undefined);
       if (r.ok) setClases(await r.json());
-    } catch (e) { console.error("Error al cargar clases en tiempo real:", e); }
+    } catch (e) { if (e?.name !== 'AbortError') console.error("Error al cargar clases en tiempo real:", e); }
   };
 
-  const fetchLiberaciones = async () => {
+  const fetchLiberaciones = async (signal) => {
     try {
-      const r = await fetch(`/api/aulas/liberadas?fecha=${hoyStr}`);
+      const r = await fetch(`/api/aulas/liberadas?fecha=${hoyStr}`, signal ? { signal } : undefined);
       if (r.ok) setLiberaciones(await r.json());
-    } catch (e) { console.error("Error al cargar liberaciones:", e); }
+    } catch (e) { if (e?.name !== 'AbortError') console.error("Error al cargar liberaciones:", e); }
   };
 
-  const fetchEventosHoy = async () => {
+  const fetchEventosHoy = async (signal) => {
     try {
-      const r = await fetch('/api/eventos-hoy');
+      const r = await fetch('/api/eventos-hoy', signal ? { signal } : undefined);
       if (r.ok) setEventosHoy(await r.json());
-    } catch (e) { console.error("Error al cargar eventos de hoy:", e); }
+    } catch (e) { if (e?.name !== 'AbortError') console.error("Error al cargar eventos de hoy:", e); }
   };
 
   /** Evento activo en este momento para un aula específica (puede ser null). */
@@ -241,25 +241,31 @@ export default function GestionAulas() {
 
   // Carga inicial + refresco cada 30 s
   useEffect(() => {
-    fetchAulas();
-    fetchOcupacion();
-    fetchClasesAhora(ahora);
-    fetchLiberaciones();
-    fetchEventosHoy();
-    const intervalo = setInterval(() => {
-      fetchAulas();
-      fetchOcupacion();
-      fetchClasesAhora(ahora);
-      fetchLiberaciones();
-      fetchEventosHoy();
-    }, 30000);
-    return () => clearInterval(intervalo);
+    let controller = null;
+    const cargarTodo = () => {
+      if (controller) controller.abort();
+      controller = new AbortController();
+      const { signal } = controller;
+      fetchAulas(signal);
+      fetchOcupacion(signal);
+      fetchClasesAhora(ahora, signal);
+      fetchLiberaciones(signal);
+      fetchEventosHoy(signal);
+    };
+    cargarTodo();
+    const intervalo = setInterval(cargarTodo, 30000);
+    return () => {
+      clearInterval(intervalo);
+      if (controller) controller.abort();
+    };
   }, [hoyStr]);
 
   // Re-evalúa clases y eventos en tiempo real cuando el reloj del contexto avanza (cada 60 s)
-  useEffect(() => { 
-    fetchClasesAhora(ahora); 
-    fetchEventosHoy();
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchClasesAhora(ahora, controller.signal);
+    fetchEventosHoy(controller.signal);
+    return () => controller.abort();
   }, [ahora]);
 
   /** Clase activa en este momento para un aula específica (puede ser null). */

@@ -69,13 +69,18 @@ export default function ConfiguracionPerfil() {
 
   // ── Fetch lista de usuarios (actualización periódica) ────────────────────
   useEffect(() => {
+    let controller = null;
     const cargarUsuarios = () => {
-      fetch('/api/usuarios')
+      if (controller) controller.abort();
+      controller = new AbortController();
+      const { signal } = controller;
+
+      fetch('/api/usuarios', { signal })
         .then(r => r.ok ? r.json() : [])
         .then(data => setUsuarios(Array.isArray(data) ? data : []))
         .catch(() => { });
 
-      fetch('/api/reservas/usuarios')
+      fetch('/api/reservas/usuarios', { signal })
         .then(r => r.ok ? r.json() : [])
         .then(data => setUsuariosReservas(Array.isArray(data) ? data : []))
         .catch(() => { });
@@ -83,7 +88,10 @@ export default function ConfiguracionPerfil() {
 
     cargarUsuarios();
     const intervalUsuarios = setInterval(cargarUsuarios, 15000);
-    return () => clearInterval(intervalUsuarios);
+    return () => {
+      clearInterval(intervalUsuarios);
+      if (controller) controller.abort();
+    };
   }, []);
 
 

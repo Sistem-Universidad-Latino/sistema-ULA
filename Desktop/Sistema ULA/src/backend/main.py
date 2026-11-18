@@ -8607,16 +8607,50 @@ def _consultar_reservas_como_eventos(
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Consulta reservas_reservaciones en TiDB y aplica los mismos filtros de SIPREF."""
+    """Consulta reservas_reservaciones en TiDB con filtros SQL y aplica los filtros dinámicos de SIPREF."""
+    condiciones = ["1=1"]
+    params: List[Any] = []
+
+    if estado and estado != "todos":
+        if estado.lower() == "cancelado":
+            condiciones.append("UPPER(rr.estado) = 'CANCELADA'")
+        else:
+            condiciones.append("UPPER(rr.estado) != 'CANCELADA'")
+    if tipo_evento and tipo_evento != "todos":
+        condiciones.append("LOWER(COALESCE(rr.tipo_evento, '')) = LOWER(%s)")
+        params.append(tipo_evento)
+    if aula and aula != "todas":
+        condiciones.append("(rr.espacio_nombre = %s OR rr.espacio_id = %s)")
+        params.extend([aula, aula])
+
+    rango_ini_str = fecha_inicio or (fecha if not fecha_fin else None)
+    rango_fin_str = fecha_fin or (fecha if not fecha_inicio else None)
+    if rango_ini_str:
+        try:
+            dt_ini = datetime.strptime(rango_ini_str, "%Y-%m-%d").replace(tzinfo=ZONA_HORARIA_INSTITUCIONAL)
+            condiciones.append("rr.inicio >= %s")
+            params.append(dt_ini.astimezone(ZoneInfo("UTC")).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            pass
+    if rango_fin_str:
+        try:
+            dt_fin = datetime.strptime(rango_fin_str, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=ZONA_HORARIA_INSTITUCIONAL)
+            condiciones.append("rr.inicio <= %s")
+            params.append(dt_fin.astimezone(ZoneInfo("UTC")).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            pass
+
+    where_sql = " AND ".join(condiciones)
     try:
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT rr.*,
                    COALESCE(NULLIF(TRIM(ru.nombre), ''), NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.creado_por), ''), 'SIPREF Reservas') AS usuario_creador_nombre,
                    COALESCE(NULLIF(TRIM(ru.correo), ''), NULLIF(TRIM(rr.correo_responsable), ''), '') AS usuario_creador_correo
             FROM reservas_reservaciones rr
             LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
+            WHERE {where_sql}
             ORDER BY rr.inicio DESC
-        """)
+        """, tuple(params))
         filas = cursor.fetchall() or []
     except Exception as e:
         print(f"Advertencia al consultar reservas_reservaciones: {e}")
