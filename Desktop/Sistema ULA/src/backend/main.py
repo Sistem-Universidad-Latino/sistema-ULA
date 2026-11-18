@@ -272,6 +272,12 @@ def migrar_columnas_verificacion():
                     verification_code_expira DATETIME NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )""",
+                """CREATE TABLE IF NOT EXISTS reservas_acomodos_catalogo (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    nombre VARCHAR(120) NOT NULL,
+                    activo TINYINT(1) NOT NULL DEFAULT 1,
+                    creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )""",
             ]:
                 try:
                     cursor.execute(sentencia)
@@ -12060,6 +12066,120 @@ def eliminar_plantilla_evento(plantilla_id: int):
     except pymysql.Error as e:
         connection.rollback()
         raise HTTPException(status_code=500, detail=f"Error al eliminar plantilla de evento: {str(e)}")
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------
+# CATÁLOGO DE ACOMODOS DE MOBILIARIO (reservas_acomodos_catalogo)
+# ---------------------------------------------------------
+class AcomodoCatalogoSchema(BaseModel):
+    nombre: str
+
+
+def _asegurar_tabla_acomodos(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reservas_acomodos_catalogo (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            nombre VARCHAR(120) NOT NULL,
+            activo TINYINT(1) NOT NULL DEFAULT 1,
+            creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("SELECT COUNT(*) AS total FROM reservas_acomodos_catalogo")
+    row = cursor.fetchone()
+    if row and int(row.get("total") or 0) == 0:
+        for base in ("Auditorio", "Tipo Escuela", "Herradura / U", "Mesa Redonda"):
+            cursor.execute("INSERT INTO reservas_acomodos_catalogo (nombre, activo) VALUES (%s, TRUE)", (base,))
+
+
+@app.get("/api/acomodos")
+def listar_acomodos_catalogo():
+    """Lista las opciones de acomodo de mobiliario activas."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            _asegurar_tabla_acomodos(cursor)
+            connection.commit()
+            cursor.execute("SELECT id, nombre FROM reservas_acomodos_catalogo WHERE activo = TRUE ORDER BY id ASC")
+            return cursor.fetchall() or []
+    except pymysql.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar acomodos: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.post("/api/acomodos")
+def crear_acomodo_catalogo(req: AcomodoCatalogoSchema):
+    """Crea o reactiva una opción de acomodo."""
+    nombre_limpio = (req.nombre or "").strip()[:120]
+    if not nombre_limpio:
+        raise HTTPException(status_code=400, detail="El nombre del acomodo es obligatorio.")
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            _asegurar_tabla_acomodos(cursor)
+            cursor.execute(
+                "SELECT id, nombre FROM reservas_acomodos_catalogo WHERE LOWER(nombre) = LOWER(%s) LIMIT 1",
+                (nombre_limpio,),
+            )
+            existente = cursor.fetchone()
+            if existente:
+                cursor.execute("UPDATE reservas_acomodos_catalogo SET activo = TRUE WHERE id = %s", (existente["id"],))
+                res_item = {"id": existente["id"], "nombre": existente["nombre"]}
+            else:
+                cursor.execute("INSERT INTO reservas_acomodos_catalogo (nombre, activo) VALUES (%s, TRUE)", (nombre_limpio,))
+                res_item = {"id": cursor.lastrowid, "nombre": nombre_limpio}
+        connection.commit()
+        return res_item
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al guardar acomodo: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.put("/api/acomodos/{acomodo_id}")
+def actualizar_acomodo_catalogo(acomodo_id: int, req: AcomodoCatalogoSchema):
+    """Renombra una opción de acomodo existente."""
+    nombre_limpio = (req.nombre or "").strip()[:120]
+    if not nombre_limpio:
+        raise HTTPException(status_code=400, detail="El nombre del acomodo es obligatorio.")
+
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            _asegurar_tabla_acomodos(cursor)
+            cursor.execute("SELECT id FROM reservas_acomodos_catalogo WHERE id = %s AND activo = TRUE LIMIT 1", (acomodo_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Opción de acomodo no encontrada.")
+            cursor.execute("UPDATE reservas_acomodos_catalogo SET nombre = %s WHERE id = %s", (nombre_limpio, acomodo_id))
+        connection.commit()
+        return {"id": acomodo_id, "nombre": nombre_limpio}
+    except HTTPException:
+        connection.rollback()
+        raise
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al actualizar acomodo: {str(e)}")
+    finally:
+        connection.close()
+
+
+@app.delete("/api/acomodos/{acomodo_id}")
+def eliminar_acomodo_catalogo(acomodo_id: int):
+    """Da de baja lógica una opción de acomodo."""
+    connection = get_db_connection()
+    try:
+        with connection.cursor() as cursor:
+            _asegurar_tabla_acomodos(cursor)
+            cursor.execute("UPDATE reservas_acomodos_catalogo SET activo = FALSE WHERE id = %s", (acomodo_id,))
+        connection.commit()
+        return {"success": True, "id": acomodo_id}
+    except pymysql.Error as e:
+        connection.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al eliminar acomodo: {str(e)}")
     finally:
         connection.close()
 

@@ -50,6 +50,13 @@ export default function AgendarEventoModal({
   const [cargandoRecursos, setCargandoRecursos] = useState(false);
   const [restaurandoPredefinidos, setRestaurandoPredefinidos] = useState(false);
 
+  // Opciones rápidas de acomodo de mobiliario (modificables / eliminables)
+  const [acomodosCatalogo, setAcomodosCatalogo] = useState([]);
+  const [editandoAcomodos, setEditandoAcomodos] = useState(false);
+  const [acomodoEnEdicion, setAcomodoEnEdicion] = useState(null);
+  const [acomodoInputTexto, setAcomodoInputTexto] = useState('');
+  const [guardandoAcomodo, setGuardandoAcomodo] = useState(false);
+
   // Plantillas de evento compartidas (reservas_plantillas_evento)
   const [plantillasEvento, setPlantillasEvento] = useState([]);
   const [plantillaSeleccionadaId, setPlantillaSeleccionadaId] = useState('');
@@ -113,6 +120,13 @@ export default function AgendarEventoModal({
         if (Array.isArray(data)) setPlantillasEvento(data);
       })
       .catch(err => console.error('Error al cargar plantillas de evento:', err));
+
+    fetch(`${API_URL}/api/acomodos`)
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => {
+        if (Array.isArray(data)) setAcomodosCatalogo(data);
+      })
+      .catch(err => console.error('Error al cargar opciones de acomodo:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
@@ -146,6 +160,9 @@ export default function AgendarEventoModal({
     setPlantillaSeleccionadaId('');
     setModoEliminarMateriales(false);
     setMaterialesParaEliminar([]);
+    setEditandoAcomodos(false);
+    setAcomodoEnEdicion(null);
+    setAcomodoInputTexto('');
     setErrorDisponibilidad('');
   };
 
@@ -868,6 +885,100 @@ export default function AgendarEventoModal({
     }
   };
 
+  const handleGuardarAcomodoCatalogo = async () => {
+    const nombreLimpio = acomodoInputTexto.trim();
+    if (!nombreLimpio) return;
+
+    setGuardandoAcomodo(true);
+    try {
+      const esEdicion = Boolean(acomodoEnEdicion?.id);
+      const url = esEdicion
+        ? `${API_URL}/api/acomodos/${acomodoEnEdicion.id}`
+        : `${API_URL}/api/acomodos`;
+      const res = await fetch(url, {
+        method: esEdicion ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre: nombreLimpio })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'error',
+          title: data?.detail || 'No se pudo guardar la opción de acomodo',
+          showConfirmButton: false,
+          timer: 2500
+        });
+        return;
+      }
+
+      if (esEdicion) {
+        setAcomodosCatalogo(prev => prev.map(item => (item.id === data.id ? data : item)));
+        if (formData.acomodo_mobiliario === acomodoEnEdicion.nombre) {
+          setFormData(prev => ({ ...prev, acomodo_mobiliario: data.nombre }));
+        }
+      } else {
+        setAcomodosCatalogo(prev => (prev.some(item => item.id === data.id) ? prev : [...prev, data]));
+        setFormData(prev => ({ ...prev, acomodo_mobiliario: data.nombre }));
+      }
+
+      setAcomodoEnEdicion(null);
+      setAcomodoInputTexto('');
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: esEdicion ? 'Opción actualizada' : 'Opción agregada',
+        showConfirmButton: false,
+        timer: 2000
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al guardar acomodo',
+        showConfirmButton: false,
+        timer: 2500
+      });
+    } finally {
+      setGuardandoAcomodo(false);
+    }
+  };
+
+  const handleEliminarAcomodoCatalogo = async (item) => {
+    try {
+      const res = await fetch(`${API_URL}/api/acomodos/${item.id}`, { method: 'DELETE' });
+      if (!res.ok) return;
+      setAcomodosCatalogo(prev => prev.filter(a => a.id !== item.id));
+      if (formData.acomodo_mobiliario === item.nombre) {
+        setFormData(prev => ({ ...prev, acomodo_mobiliario: '' }));
+      }
+      if (acomodoEnEdicion?.id === item.id) {
+        setAcomodoEnEdicion(null);
+        setAcomodoInputTexto('');
+      }
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: `"${item.nombre}" eliminado`,
+        showConfirmButton: false,
+        timer: 2000
+      });
+    } catch {
+      Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'error',
+        title: 'Error de conexión al eliminar acomodo',
+        showConfirmButton: false,
+        timer: 2500
+      });
+    }
+  };
+
   const cantidadMaterialesSeleccionados = Object.keys(recursosSeleccionados).length;
   const partesResumenMateriales = [
     ...Object.entries(recursosSeleccionados)
@@ -1408,28 +1519,108 @@ export default function AgendarEventoModal({
                       <span className="material-symbols-outlined text-base">chair</span>
                       Acomodo de mesas, sillas y mesa panel
                     </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {['Auditorio', 'Tipo Escuela', 'Herradura / U', 'Mesa Redonda'].map((tipo) => (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditandoAcomodos(prev => !prev);
+                        setAcomodoEnEdicion(null);
+                        setAcomodoInputTexto('');
+                      }}
+                      className="text-[11px] font-bold text-[#1c355e] hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-sm">{editandoAcomodos ? 'check' : 'edit'}</span>
+                      {editandoAcomodos ? 'Listo' : 'Editar / Eliminar opciones'}
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {acomodosCatalogo.map((item) =>
+                      editandoAcomodos ? (
+                        <div
+                          key={item.id}
+                          className="inline-flex items-center gap-1 pl-2.5 pr-1 py-0.5 rounded-full text-[11px] font-bold border border-slate-300 bg-slate-50 text-slate-700"
+                        >
+                          <span>{item.nombre}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAcomodoEnEdicion(item);
+                              setAcomodoInputTexto(item.nombre);
+                            }}
+                            title={`Modificar "${item.nombre}"`}
+                            className="p-0.5 text-[#1c355e] hover:bg-[#1c355e]/10 rounded-full cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-[13px]">edit</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleEliminarAcomodoCatalogo(item)}
+                            title={`Eliminar "${item.nombre}"`}
+                            className="p-0.5 text-red-500 hover:bg-red-100 rounded-full cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-[13px]">close</span>
+                          </button>
+                        </div>
+                      ) : (
                         <button
-                          key={tipo}
+                          key={item.id}
                           type="button"
                           onClick={() =>
                             setFormData(prev => ({
                               ...prev,
-                              acomodo_mobiliario: prev.acomodo_mobiliario === tipo ? '' : tipo
+                              acomodo_mobiliario: prev.acomodo_mobiliario === item.nombre ? '' : item.nombre
                             }))
                           }
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
-                            formData.acomodo_mobiliario === tipo
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
+                            formData.acomodo_mobiliario === item.nombre
                               ? 'bg-[#1c355e] text-white border-[#1c355e]'
                               : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-[#1c355e]/40'
                           }`}
                         >
-                          {tipo}
+                          {item.nombre}
                         </button>
-                      ))}
-                    </div>
+                      )
+                    )}
                   </div>
+
+                  {editandoAcomodos && (
+                    <div className="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-lg border border-dashed border-[#1c355e]/30">
+                      <input
+                        type="text"
+                        maxLength={120}
+                        placeholder={acomodoEnEdicion ? 'Nuevo nombre...' : 'Agregar nueva opción de acomodo...'}
+                        value={acomodoInputTexto}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleGuardarAcomodoCatalogo();
+                          }
+                        }}
+                        onChange={(e) => setAcomodoInputTexto(e.target.value)}
+                        className="flex-1 min-w-[160px] px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-[#1c355e]/20"
+                      />
+                      {acomodoEnEdicion && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAcomodoEnEdicion(null);
+                            setAcomodoInputTexto('');
+                          }}
+                          className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-bold text-slate-600 cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={guardandoAcomodo || !acomodoInputTexto.trim()}
+                        onClick={handleGuardarAcomodoCatalogo}
+                        className="px-3 py-1 rounded-lg bg-[#1c355e] hover:bg-[#152847] text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                      >
+                        {guardandoAcomodo ? 'Guardando...' : acomodoEnEdicion ? 'Guardar cambio' : '+ Agregar'}
+                      </button>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     <div className="sm:col-span-2">
                       <label className="block text-[11px] font-bold text-slate-600 mb-1">
