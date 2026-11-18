@@ -845,7 +845,7 @@ export default function AgendarEventoModal({
         const enModoBorrar = permitirEliminarCatalogo && modoEliminarMateriales;
         const marcadoBorrar = enModoBorrar && materialesParaEliminar.includes(rec.id);
         const marcado = enModoBorrar ? marcadoBorrar : mapaSeleccionado[rec.id] !== undefined;
-        const cantidad = mapaSeleccionado[rec.id] || 1;
+        const cantidad = mapaSeleccionado[rec.id] ?? 1;
         const requiereCantidad = !enModoBorrar && rec.unidad !== 'sin_cantidad' && rec.unidad !== 'fijo';
 
         return (
