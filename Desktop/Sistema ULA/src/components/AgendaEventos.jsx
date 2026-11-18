@@ -915,14 +915,26 @@ export default function AgendaEventos({ aulasList = [] }) {
                             <span className="material-symbols-outlined text-sm">visibility</span>
                             Detalle / Historial
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => handleEliminarEvento(ev)}
-                            className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
-                            title="Eliminar evento"
-                          >
-                            <span className="material-symbols-outlined text-base">delete</span>
-                          </button>
+                          <div className="flex items-center gap-1">
+                            {estadoEfectivo !== 'Cancelado' && estadoEfectivo !== 'Finalizado' && (
+                              <button
+                                type="button"
+                                onClick={() => handleEditar(ev)}
+                                className="text-slate-400 hover:text-[#1c355e] p-1 rounded cursor-pointer"
+                                title="Editar evento"
+                              >
+                                <span className="material-symbols-outlined text-base">edit</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleEliminarEvento(ev)}
+                              className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                              title="Eliminar evento"
+                            >
+                              <span className="material-symbols-outlined text-base">delete</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1037,15 +1049,13 @@ export default function AgendaEventos({ aulasList = [] }) {
                     <div className="flex items-center gap-1">
                       {estadoEfectivo !== 'Cancelado' && estadoEfectivo !== 'Finalizado' && (
                         <>
-                          {!esDeReservas && (
-                            <button
-                              onClick={() => handleEditar(ev)}
-                              className="p-2 text-slate-500 hover:text-[#1c355e] hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
-                              title="Editar evento"
-                            >
-                              <span className="material-symbols-outlined text-lg">edit</span>
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleEditar(ev)}
+                            className="p-2 text-slate-500 hover:text-[#1c355e] hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                            title="Editar evento"
+                          >
+                            <span className="material-symbols-outlined text-lg">edit</span>
+                          </button>
                           <button
                             onClick={() => setModalCancelar(ev)}
                             className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-all cursor-pointer"

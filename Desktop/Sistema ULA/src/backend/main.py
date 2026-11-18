@@ -8308,7 +8308,7 @@ class DisponibilidadReqSchema(BaseModel):
     fecha: str
     hora_inicio: str
     hora_fin: str
-    evento_id: Optional[int] = None
+    evento_id: Optional[Union[int, str]] = None
 
 
 def _time_a_minutos(val) -> int:
@@ -8340,7 +8340,7 @@ def _calcular_fecha_programada(fecha_str: str, hora_inicio_str: str, valor: int,
         return datetime.now()
 
 
-def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, hora_inicio_str: str, hora_fin_str: str, evento_id: Optional[int] = None):
+def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, hora_inicio_str: str, hora_fin_str: str, evento_id: Optional[Union[int, str]] = None):
     try:
         dt_event_ini = datetime.strptime(f"{fecha_str} {hora_inicio_str[:5]}", "%Y-%m-%d %H:%M")
         dt_event_fin = datetime.strptime(f"{fecha_str} {hora_fin_str[:5]}", "%Y-%m-%d %H:%M")
@@ -8405,6 +8405,9 @@ def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, 
         print(f"Error al verificar clases: {e_cl}")
 
     # 3. Otros Eventos (`eventos_aulas`)
+    es_reserva_id = isinstance(evento_id, str) and str(evento_id).startswith("res-")
+    res_uuid_excluido = str(evento_id)[4:] if es_reserva_id else None
+
     query_ev = """
         SELECT * FROM eventos_aulas 
         WHERE aula_nombre = %s 
@@ -8412,9 +8415,9 @@ def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, 
           AND estado IN ('Programado', 'En curso')
     """
     params_ev = [aula_nombre, fecha_str]
-    if evento_id:
+    if evento_id and not es_reserva_id:
         query_ev += " AND id != %s"
-        params_ev.append(evento_id)
+        params_ev.append(int(evento_id))
 
     cursor.execute(query_ev, params_ev)
     otros_eventos = cursor.fetchall()
@@ -8437,14 +8440,19 @@ def _verificar_disponibilidad_interna(cursor, aula_nombre: str, fecha_str: str, 
         nueva_fecha_inicio = dt_ini_utc.strftime("%Y-%m-%d %H:%M:%S")
         nueva_fecha_fin = dt_fin_utc.strftime("%Y-%m-%d %H:%M:%S")
         aula_id_str = str(aula_db["id"]) if aula_db and aula_db.get("id") is not None else aula_nombre
-        cursor.execute("""
+        query_res = """
             SELECT codigo, nombre_evento, responsable, inicio, fin
             FROM reservas_reservaciones
             WHERE (espacio_id = %s OR espacio_id = %s OR espacio_nombre = %s)
               AND estado = 'PROGRAMADA'
               AND (%s < fin AND %s > inicio)
-            LIMIT 1
-        """, (aula_nombre, aula_id_str, aula_nombre, nueva_fecha_inicio, nueva_fecha_fin))
+        """
+        params_res = [aula_nombre, aula_id_str, aula_nombre, nueva_fecha_inicio, nueva_fecha_fin]
+        if res_uuid_excluido:
+            query_res += " AND id != %s"
+            params_res.append(res_uuid_excluido)
+        query_res += " LIMIT 1"
+        cursor.execute(query_res, tuple(params_res))
         reserva_conflicto = cursor.fetchone()
         if reserva_conflicto:
             return (
@@ -9400,11 +9408,141 @@ def api_obtener_evento(evento_id: str):
 
 
 @app.put("/api/eventos/{evento_id}")
-def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
+def api_editar_evento(evento_id: str, data: EventoUpdateSchema):
     connection = get_db_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT * FROM eventos_aulas WHERE id = %s", (evento_id,))
+            if str(evento_id).startswith("res-"):
+                res_uuid = str(evento_id)[4:]
+                cursor.execute("SELECT * FROM reservas_reservaciones WHERE id = %s", (res_uuid,))
+                actual_res = cursor.fetchone()
+                if not actual_res:
+                    raise HTTPException(status_code=404, detail="Reservación no encontrada.")
+
+                ini_local_actual = _utc_a_local(actual_res.get("inicio"))
+                fin_local_actual = _utc_a_local(actual_res.get("fin"))
+                actual_fecha_str = ini_local_actual.strftime("%Y-%m-%d") if ini_local_actual else _ahora_local().strftime("%Y-%m-%d")
+                actual_ini_str = ini_local_actual.strftime("%H:%M") if ini_local_actual else "09:00"
+                actual_fin_str = fin_local_actual.strftime("%H:%M") if fin_local_actual else "11:00"
+
+                nuevo_aula = data.aula_nombre or actual_res.get("espacio_nombre") or actual_res.get("espacio_id") or ""
+                nueva_fecha = data.fecha or actual_fecha_str
+                nueva_ini = data.hora_inicio or actual_ini_str
+                nueva_fin = data.hora_fin or actual_fin_str
+
+                if (
+                    nuevo_aula != (actual_res.get("espacio_nombre") or "")
+                    or nueva_fecha != actual_fecha_str
+                    or nueva_ini != actual_ini_str
+                    or nueva_fin != actual_fin_str
+                ):
+                    disp, motivo = _verificar_disponibilidad_interna(
+                        cursor, nuevo_aula, nueva_fecha, nueva_ini, nueva_fin, evento_id
+                    )
+                    if not disp:
+                        raise HTTPException(status_code=400, detail=motivo)
+
+                cursor.execute("SELECT id FROM aulas WHERE nombre = %s LIMIT 1", (nuevo_aula,))
+                aula_row = cursor.fetchone()
+                nuevo_espacio_id = str(aula_row["id"]) if aula_row and aula_row.get("id") is not None else (actual_res.get("espacio_id") or nuevo_aula)
+
+                dt_ini_local = datetime.strptime(f"{nueva_fecha} {nueva_ini[:5]}", "%Y-%m-%d %H:%M")
+                dt_fin_local = datetime.strptime(f"{nueva_fecha} {nueva_fin[:5]}", "%Y-%m-%d %H:%M")
+                dt_ini_utc = dt_ini_local.replace(tzinfo=ZONA_HORARIA_INSTITUCIONAL).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+                dt_fin_utc = dt_fin_local.replace(tzinfo=ZONA_HORARIA_INSTITUCIONAL).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+                nuevo_acomodo = (
+                    (data.acomodo_mobiliario or "").strip()[:255] or None
+                    if data.acomodo_mobiliario is not None
+                    else actual_res.get("acomodo_mobiliario")
+                )
+                nuevo_sillas_panel = (
+                    max(0, int(data.sillas_mesa_panel or 0))
+                    if data.sillas_mesa_panel is not None
+                    else int(actual_res.get("sillas_mesa_panel") or 0)
+                )
+
+                cursor.execute("""
+                    UPDATE reservas_reservaciones SET
+                        tipo_evento = %s,
+                        nombre_evento = %s,
+                        espacio_id = %s,
+                        espacio_nombre = %s,
+                        inicio = %s,
+                        fin = %s,
+                        responsable = %s,
+                        correo_responsable = %s,
+                        descripcion = %s,
+                        acomodo_mobiliario = %s,
+                        sillas_mesa_panel = %s,
+                        actualizado_en = UTC_TIMESTAMP(),
+                        version = COALESCE(version, 1) + 1
+                    WHERE id = %s
+                """, (
+                    data.tipo_evento or actual_res.get("tipo_evento") or "Evento",
+                    data.nombre_evento or actual_res.get("nombre_evento") or "",
+                    nuevo_espacio_id,
+                    nuevo_aula,
+                    dt_ini_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                    dt_fin_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                    data.responsable or actual_res.get("responsable") or "",
+                    data.correo or actual_res.get("correo_responsable") or "",
+                    data.descripcion if data.descripcion is not None else (actual_res.get("descripcion") or ""),
+                    nuevo_acomodo,
+                    nuevo_sillas_panel,
+                    res_uuid,
+                ))
+
+                if data.recursos is not None:
+                    cursor.execute("DELETE FROM reservas_recursos_evento WHERE reservacion_id = %s", (res_uuid,))
+                    for mat in data.recursos:
+                        cursor.execute("""
+                            INSERT INTO reservas_recursos_evento (reservacion_id, recurso_id, cantidad)
+                            VALUES (%s, %s, %s)
+                        """, (res_uuid, mat.recurso_id, max(1, int(mat.cantidad or 1))))
+
+                if data.recordatorios is not None:
+                    cursor.execute("DELETE FROM reservas_recordatorios WHERE reservacion_id = %s AND enviado_en IS NULL", (res_uuid,))
+                    for rec in data.recordatorios:
+                        f_prog_local = _calcular_fecha_programada(nueva_fecha, nueva_ini, rec.antencion_valor, rec.antencion_unidad)
+                        f_prog_utc = f_prog_local.replace(tzinfo=ZONA_HORARIA_INSTITUCIONAL).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+                        cursor.execute("""
+                            INSERT INTO reservas_recordatorios (reservacion_id, canal, anticipacion, unidad, enviar_en, intentos)
+                            VALUES (%s, %s, %s, %s, %s, 0)
+                        """, (res_uuid, rec.tipo, rec.antencion_valor, rec.antencion_unidad, f_prog_utc.strftime("%Y-%m-%d %H:%M:%S")))
+
+                try:
+                    cursor.execute("""
+                        INSERT INTO reservas_auditoria (ocurrido_en, actor_tipo, actor_id, actor_nombre, accion, entidad, entidad_id, datos_antes, datos_despues)
+                        VALUES (UTC_TIMESTAMP(), 'PREFECTURA_SIPREF', %s, %s, 'MODIFICADA_DESDE_SIPREF', 'reservacion', %s, %s, %s)
+                    """, (
+                        data.usuario_modificador or "Prefectura",
+                        data.usuario_modificador or "Prefectura",
+                        res_uuid,
+                        json.dumps({
+                            "nombre_evento": actual_res.get("nombre_evento"),
+                            "espacio_nombre": actual_res.get("espacio_nombre"),
+                            "inicio": str(actual_res.get("inicio")),
+                            "fin": str(actual_res.get("fin")),
+                        }),
+                        json.dumps({
+                            "nombre_evento": data.nombre_evento or actual_res.get("nombre_evento"),
+                            "espacio_nombre": nuevo_aula,
+                            "fecha": nueva_fecha,
+                            "hora_inicio": nueva_ini,
+                            "hora_fin": nueva_fin,
+                            "sillas_mesa_panel": nuevo_sillas_panel,
+                            "acomodo_mobiliario": nuevo_acomodo,
+                        }),
+                    ))
+                except Exception:
+                    pass
+
+                connection.commit()
+                return {"success": True, "message": "Reservación de SIPREF Reservas actualizada exitosamente."}
+
+            ev_id_int = int(evento_id)
+            cursor.execute("SELECT * FROM eventos_aulas WHERE id = %s", (ev_id_int,))
             actual = cursor.fetchone()
             if not actual:
                 raise HTTPException(status_code=404, detail="Evento no encontrado.")
@@ -9419,7 +9557,7 @@ def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
             actual_fin_str = _formatear_hora_hhmm(actual["hora_fin"])
             if nuevo_aula != actual["aula_nombre"] or nueva_fecha != str(actual["fecha"]) or nueva_ini != actual_ini_str or nueva_fin != actual_fin_str:
                 disp, motivo = _verificar_disponibilidad_interna(
-                    cursor, nuevo_aula, nueva_fecha, nueva_ini, nueva_fin, evento_id
+                    cursor, nuevo_aula, nueva_fecha, nueva_ini, nueva_fin, ev_id_int
                 )
                 if not disp:
                     raise HTTPException(status_code=400, detail=motivo)
@@ -9475,31 +9613,31 @@ def api_editar_evento(evento_id: int, data: EventoUpdateSchema):
                 nuevo_acomodo,
                 nuevo_sillas_panel,
                 nuevo_estado,
-                evento_id
+                ev_id_int
             ))
 
             if data.recordatorios is not None:
-                cursor.execute("DELETE FROM eventos_recordatorios WHERE evento_id = %s", (evento_id,))
+                cursor.execute("DELETE FROM eventos_recordatorios WHERE evento_id = %s", (ev_id_int,))
                 for rec in data.recordatorios:
                     f_prog = _calcular_fecha_programada(nueva_fecha, nueva_ini, rec.antencion_valor, rec.antencion_unidad)
                     cursor.execute("""
                         INSERT INTO eventos_recordatorios (evento_id, tipo, antencion_valor, antencion_unidad, fecha_programada, estado)
                         VALUES (%s, %s, %s, %s, %s, 'pendiente')
-                    """, (evento_id, rec.tipo, rec.antencion_valor, rec.antencion_unidad, f_prog.strftime("%Y-%m-%d %H:%M:%S")))
+                    """, (ev_id_int, rec.tipo, rec.antencion_valor, rec.antencion_unidad, f_prog.strftime("%Y-%m-%d %H:%M:%S")))
 
             if data.recursos is not None:
-                cursor.execute("DELETE FROM eventos_aulas_recursos WHERE evento_id = %s", (evento_id,))
+                cursor.execute("DELETE FROM eventos_aulas_recursos WHERE evento_id = %s", (ev_id_int,))
                 for mat in data.recursos:
                     cursor.execute("""
                         INSERT INTO eventos_aulas_recursos (evento_id, recurso_id, cantidad)
                         VALUES (%s, %s, %s)
-                    """, (evento_id, mat.recurso_id, max(1, int(mat.cantidad or 1))))
+                    """, (ev_id_int, mat.recurso_id, max(1, int(mat.cantidad or 1))))
 
             detalle_auditoria = "; ".join(cambios) if cambios else "Actualización general de datos de reserva."
             cursor.execute("""
                 INSERT INTO eventos_historial (evento_id, usuario, accion, detalles)
                 VALUES (%s, %s, 'Modificado', %s)
-            """, (evento_id, data.usuario_modificador or "Prefectura", detalle_auditoria))
+            """, (ev_id_int, data.usuario_modificador or "Prefectura", detalle_auditoria))
 
             connection.commit()
             return {"success": True, "message": "Evento actualizado exitosamente."}
