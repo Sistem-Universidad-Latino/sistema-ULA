@@ -1116,17 +1116,10 @@ export default function GestionAulas() {
                               : esZonaExclusiva
                               ? eventoActivo
                                 ? 'border-purple-300'
-                                : 'border-[#fdbb11]/70'
+                                : 'border-[#1c355e]/25'
                               : claseActiva   ? 'border-blue-300'
                               : estadoHorario === 'bloqueada' ? 'border-red-200'
                               : 'border-[#c5c6cf]/30';
-            const cardBgClass = enMant
-                              ? 'bg-white'
-                              : esZonaExclusiva
-                              ? eventoActivo
-                                ? 'bg-gradient-to-br from-purple-50/80 via-white to-[#fef8e2] shadow-sm hover:shadow-md'
-                                : 'bg-gradient-to-br from-[#fffdf4] via-[#fef9e4] to-[#fdf1c7]/75 shadow-sm hover:shadow-md'
-                              : 'bg-white';
 
             const norm = (s) => (s || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
             const asignaturasEnAula = new Set(carrerasAula.map(c => norm(c.asignatura)).filter(Boolean));
@@ -1162,25 +1155,41 @@ export default function GestionAulas() {
             });
 
             return (
-              <div key={aula.id} className={`${cardBgClass} border rounded-2xl p-6 shadow-sm transition-all ${borderClass}`}>
-                <div className="flex justify-between items-start gap-2 mb-4">
+              <div key={aula.id} className={`bg-white border rounded-2xl overflow-hidden shadow-sm transition-all ${esZonaExclusiva ? 'hover:shadow-md' : ''} ${borderClass}`}>
+                {esZonaExclusiva && (
+                  <div className="bg-gradient-to-r from-[#1c355e] to-[#26467a] px-5 py-2.5 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wider text-[#fdbb11] whitespace-nowrap">
+                      <span className="material-symbols-outlined text-[14px]">stars</span>
+                      Exclusivo · Reservas
+                    </span>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase flex items-center gap-1 whitespace-nowrap bg-white/95 shadow-2xs ${
+                      badgeKey === 'disponible'
+                        ? 'text-[#1c9c72]'
+                        : badgeKey === 'evento'
+                        ? 'text-purple-800'
+                        : badgeKey === 'mantenimiento'
+                        ? 'text-orange-600'
+                        : 'text-[#1c355e]'
+                    }`}>
+                      <span className="material-symbols-outlined text-[12px]">{badge.icon}</span>
+                      {badge.label}
+                    </span>
+                  </div>
+                )}
+
+                <div className="p-6">
+                <div className="flex justify-between items-start gap-3 mb-4">
                   <div className="flex flex-col min-w-0">
                     <div className="flex items-center gap-2">
-                      <h2 className={`text-xl font-bold leading-snug ${esZonaExclusiva ? 'text-[#1c355e]' : 'text-[#1b1c1e]'}`}>
+                      <h2 className={`font-bold leading-snug ${esZonaExclusiva ? 'text-xl text-[#1c355e]' : 'text-2xl text-[#1b1c1e]'}`}>
                         {aula.nombre}
                       </h2>
                       {claseActiva && <span className="w-2.5 h-2.5 rounded-full bg-blue-500 flex-shrink-0 shadow-sm" />}
                     </div>
-                    {/* Badge de Turno de Ocupación o Zona Exclusiva */}
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      {esZonaExclusiva && (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-[#fdbb11]/30 text-[#1c355e] border border-[#fdbb11]/70 whitespace-nowrap shadow-2xs">
-                          <span className="material-symbols-outlined text-[12px] text-[#9a6b00]">stars</span>
-                          Exclusivo · Reservas
-                        </span>
-                      )}
-                      {ocupacion[aula.nombre] && (ocupacion[aula.nombre].matutino || ocupacion[aula.nombre].vespertino) ? (
-                        ocupacion[aula.nombre].matutino && ocupacion[aula.nombre].vespertino ? (
+                    {/* Badge de Turno de Ocupación */}
+                    {ocupacion[aula.nombre] && (ocupacion[aula.nombre].matutino || ocupacion[aula.nombre].vespertino) ? (
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                        {ocupacion[aula.nombre].matutino && ocupacion[aula.nombre].vespertino ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200/80">
                             <span className="material-symbols-outlined text-[11px]">routine</span>
                             Ambos Turnos
@@ -1195,11 +1204,11 @@ export default function GestionAulas() {
                             <span className="material-symbols-outlined text-[11px]">nights_stay</span>
                             Turno Vespertino
                           </span>
-                        )
-                      ) : !esExclusiva(aula) ? (
-                        <span className="text-[10px] font-medium text-slate-400">Sin turnos asignados</span>
-                      ) : null}
-                    </div>
+                        )}
+                      </div>
+                    ) : !esZonaExclusiva ? (
+                      <span className="text-[10px] font-medium text-slate-400 mt-1">Sin turnos asignados</span>
+                    ) : null}
                   </div>
                   {mantProg && aula.inicio_mantenimiento && (
                     <p className="text-[10px] text-yellow-700 font-semibold flex items-center gap-1 mt-0.5">
@@ -1207,12 +1216,14 @@ export default function GestionAulas() {
                       Inicia: {new Date(aula.inicio_mantenimiento).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     </p>
                   )}
-                  <div className="flex flex-col items-end gap-2">
+                  <div className="flex flex-col items-end gap-2 shrink-0">
                     {/* Badge con prioridad: tiempo real > horario programado */}
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center gap-1 ${badge.cls}`}>
-                      <span className="material-symbols-outlined text-[12px]">{badge.icon}</span>
-                      {badge.label}
-                    </span>
+                    {!esZonaExclusiva && (
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase flex items-center gap-1 whitespace-nowrap ${badge.cls}`}>
+                        <span className="material-symbols-outlined text-[12px]">{badge.icon}</span>
+                        {badge.label}
+                      </span>
+                    )}
                     {/* Botones de acción */}
                     <div className="flex gap-1">
                       <button
@@ -1464,7 +1475,7 @@ export default function GestionAulas() {
                         key={index}
                         className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${
                           esZonaExclusiva
-                            ? 'bg-white/90 border border-[#fdbb11]/40 text-[#1c355e]'
+                            ? 'bg-[#1c355e]/6 border border-[#1c355e]/15 text-[#1c355e]'
                             : 'bg-[#f4f3f6] text-[#44464e]'
                         }`}
                       >
@@ -1472,6 +1483,7 @@ export default function GestionAulas() {
                       </div>
                     ))}
                   </div>
+                </div>
                 </div>
               </div>
             );
