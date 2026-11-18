@@ -57,6 +57,7 @@ def migrar_columnas_verificacion():
                 "ALTER TABLE aulas ADD COLUMN inicio_mantenimiento DATETIME NULL",
                 "ALTER TABLE aulas ADD COLUMN fin_mantenimiento DATETIME NULL",
                 "ALTER TABLE aulas ADD COLUMN aula_temporal VARCHAR(100) NULL",
+                "ALTER TABLE aulas ADD COLUMN es_exclusiva_reservas BOOLEAN NOT NULL DEFAULT FALSE",
                 "ALTER TABLE usuarios ADD COLUMN verification_code_expira DATETIME NULL",
                 "ALTER TABLE usuarios ADD COLUMN reset_code_expira DATETIME NULL",
                 "ALTER TABLE usuarios ADD COLUMN created_at DATETIME DEFAULT NOW()",
@@ -665,6 +666,7 @@ class Aula(BaseModel):
     capacidad: int = 0
     equipos: list = []
     estado: str = "Activo"
+    es_exclusiva_reservas: bool = False
 
 class MantenimientoUpdate(BaseModel):
     en_mantenimiento: bool
@@ -4110,11 +4112,13 @@ def obtener_aulas():
             connection.commit()
             cursor.execute("""
                 SELECT id, nombre, edificio, capacidad, equipos, estado,
+                       es_exclusiva_reservas,
                        en_mantenimiento, inicio_mantenimiento, fin_mantenimiento, aula_temporal
                 FROM aulas ORDER BY nombre
             """)
             aulas = cursor.fetchall()
         for aula in (aulas or []):
+            aula['es_exclusiva_reservas'] = bool(aula.get('es_exclusiva_reservas'))
             # Parsear equipos de JSON string a lista
             if aula.get('equipos'):
                 try:
@@ -4145,13 +4149,14 @@ def crear_aula(aula: Aula, request: Request):
             # Convertir lista de equipos a JSON string
             equipos_json = json.dumps(aula.equipos)
             
-            sql = "INSERT INTO aulas (nombre, edificio, capacidad, equipos, estado) VALUES (%s, %s, %s, %s, %s)"
+            sql = "INSERT INTO aulas (nombre, edificio, capacidad, equipos, estado, es_exclusiva_reservas) VALUES (%s, %s, %s, %s, %s, %s)"
             cursor.execute(sql, (
                 aula.nombre, 
                 aula.edificio, 
                 aula.capacidad,
                 equipos_json,
-                aula.estado
+                aula.estado,
+                1 if aula.es_exclusiva_reservas else 0
             ))
             aula_id = cursor.lastrowid
             registrar_bitacora(
@@ -4178,8 +4183,16 @@ def actualizar_aula(aula_id: int, aula: Aula, request: Request):
             
             equipos_json = json.dumps(aula.equipos)
             cursor.execute(
-                "UPDATE aulas SET nombre=%s, edificio=%s, capacidad=%s, equipos=%s, estado=%s WHERE id=%s",
-                (aula.nombre, aula.edificio, aula.capacidad, equipos_json, aula.estado, aula_id)
+                "UPDATE aulas SET nombre=%s, edificio=%s, capacidad=%s, equipos=%s, estado=%s, es_exclusiva_reservas=%s WHERE id=%s",
+                (
+                    aula.nombre,
+                    aula.edificio,
+                    aula.capacidad,
+                    equipos_json,
+                    aula.estado,
+                    1 if aula.es_exclusiva_reservas else 0,
+                    aula_id,
+                )
             )
             registrar_bitacora(
                 cursor, usuario, 'actualizar_aula', 'aulas', registro_id=aula_id,

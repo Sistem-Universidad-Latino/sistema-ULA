@@ -91,10 +91,10 @@ export default function GestionAulas() {
 
   // Estado para el modal de edición
   const [aulaAEditar, setAulaAEditar] = useState(null);
-  const [formEditar, setFormEditar] = useState({ nombre: '', edificio: '', capacidad: '', equipos: [] });
+  const [formEditar, setFormEditar] = useState({ nombre: '', edificio: '', capacidad: '', equipos: [], es_exclusiva_reservas: false });
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
 
-  const [formData, setFormData] = useState({ nombre: '', edificio: '', capacidad: '', equipos: [] });
+  const [formData, setFormData] = useState({ nombre: '', edificio: '', capacidad: '', equipos: [], es_exclusiva_reservas: false });
 
   const [estadoAcademico, setEstadoAcademico] = useState({ semestral: null, cuatrimestral: null });
   const hoyStr = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
@@ -307,6 +307,16 @@ export default function GestionAulas() {
     });
   };
 
+  const esNombreExclusivoPorDefecto = (nombre) => {
+    const n = (nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return n.includes('jardin') || n.includes('audiovisual') || /^sa\d+\b/.test(n);
+  };
+
+  const esExclusiva = (aula) =>
+    typeof aula?.es_exclusiva_reservas === 'boolean'
+      ? aula.es_exclusiva_reservas
+      : esNombreExclusivoPorDefecto(aula?.nombre);
+
   const abrirModalEditar = (aula) => {
     setAulaAEditar(aula);
     setFormEditar({
@@ -314,6 +324,7 @@ export default function GestionAulas() {
       edificio: aula.edificio || '',
       capacidad: aula.capacidad || '',
       equipos: Array.isArray(aula.equipos) ? [...aula.equipos] : [],
+      es_exclusiva_reservas: esExclusiva(aula),
     });
   };
 
@@ -343,6 +354,7 @@ export default function GestionAulas() {
           capacidad: Number(formEditar.capacidad) || 0,
           equipos: formEditar.equipos,
           estado: aulaAEditar.estado || 'Activo',
+          es_exclusiva_reservas: Boolean(formEditar.es_exclusiva_reservas),
         }),
       });
       if (response.ok) {
@@ -421,10 +433,17 @@ export default function GestionAulas() {
       const response = await fetch('/api/aulas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nombre: formData.nombre, edificio: formData.edificio, capacidad: 0, equipos: formData.equipos, estado: "Activo" })
+        body: JSON.stringify({
+          nombre: formData.nombre,
+          edificio: formData.edificio,
+          capacidad: Number(formData.capacidad) || 0,
+          equipos: formData.equipos,
+          estado: "Activo",
+          es_exclusiva_reservas: Boolean(formData.es_exclusiva_reservas),
+        })
       });
       if (response.ok) {
-        setFormData({ nombre: '', edificio: '', capacidad: '', equipos: [] });
+        setFormData({ nombre: '', edificio: '', capacidad: '', equipos: [], es_exclusiva_reservas: false });
         setMostrarFormulario(false);
         fetchAulas();
         toast("Aula registrada con éxito", "exito");
@@ -435,9 +454,45 @@ export default function GestionAulas() {
     }
   };
 
-  const esLaboratorio = (nombre) => nombre.toLowerCase().startsWith('lab');
-  const aulasNormales = aulas.filter(a => !esLaboratorio(a.nombre));
-  const laboratorios  = aulas.filter(a => esLaboratorio(a.nombre));
+  const esLaboratorio = (nombre) => (nombre || '').toLowerCase().startsWith('lab');
+  const zonasExclusivas = aulas.filter(a => esExclusiva(a));
+  const aulasNormales   = aulas.filter(a => !esExclusiva(a) && !esLaboratorio(a.nombre));
+  const laboratorios    = aulas.filter(a => !esExclusiva(a) && esLaboratorio(a.nombre));
+
+  const renderToggleExclusiva = (activo, onToggle) => (
+    <div>
+      <label className="block text-xs font-bold text-[#44464e] uppercase mb-2 tracking-wide">Clasificación de Espacio</label>
+      <label
+        className={`flex items-center justify-between gap-3 p-3.5 border rounded-xl cursor-pointer transition-all ${
+          activo
+            ? 'border-[#fdbb11] bg-[#fdbb11]/15 text-[#1c355e]'
+            : 'border-[#c5c6cf]/40 bg-[#f4f3f6] hover:border-[#1c355e]/20 hover:bg-white text-[#44464e]'
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+              activo ? 'bg-[#fdbb11] text-[#1c355e]' : 'bg-white text-[#75777f]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">stars</span>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-black text-[#1b1c1e]">Zona Exclusiva (Reservas)</p>
+            <p className="text-[11px] text-[#75777f] font-medium truncate">
+              Área para eventos y reservaciones (ej. Jardín, Audiovisuales)
+            </p>
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          checked={Boolean(activo)}
+          onChange={(e) => onToggle(e.target.checked)}
+          className="w-5 h-5 rounded accent-[#1c355e] cursor-pointer flex-shrink-0"
+        />
+      </label>
+    </div>
+  );
 
   const aulasFiltradas = aulas.filter(aula => {
     const term = busqueda.trim().toLowerCase();
@@ -454,13 +509,14 @@ export default function GestionAulas() {
     }
 
     const esLab = esLaboratorio(aula.nombre);
+    const esExcl = esExclusiva(aula);
     const enMant = estaEnMantenimiento(aula);
-    const enClase = !enMant && !!obtenerClaseEnCurso(aula.nombre);
-    const estAula = enMant ? 'mantenimiento' : obtenerEstadoAula(aula.nombre);
+    const enClase = !enMant && (!!obtenerClaseEnCurso(aula.nombre) || !!obtenerEventoEnCurso(aula.nombre));
 
     // Filtro por Tipo
-    if (filtroTipo === 'aulas' && esLab) return false;
-    if (filtroTipo === 'laboratorios' && !esLab) return false;
+    if (filtroTipo === 'aulas' && (esLab || esExcl)) return false;
+    if (filtroTipo === 'laboratorios' && (!esLab || esExcl)) return false;
+    if (filtroTipo === 'exclusivas' && !esExcl) return false;
     if (filtroTipo === 'mantenimiento' && !enMant) return false;
 
     // Filtro por Estado
@@ -483,10 +539,10 @@ export default function GestionAulas() {
 
     return true;
   }).sort((a, b) => {
-    const aEsLab = a.nombre.toLowerCase().startsWith('lab');
-    const bEsLab = b.nombre.toLowerCase().startsWith('lab');
-    if (aEsLab && !bEsLab) return 1;
-    if (!aEsLab && bEsLab) return -1;
+    const cat = (x) => (esExclusiva(x) ? 2 : esLaboratorio(x.nombre) ? 1 : 0);
+    const ca = cat(a);
+    const cb = cat(b);
+    if (ca !== cb) return ca - cb;
     return a.nombre.localeCompare(b.nombre, undefined, { numeric: true, sensitivity: 'base' });
   });
 
@@ -501,7 +557,12 @@ export default function GestionAulas() {
   const labsDisponibles    = laboratorios.filter(a => !estaEnMantenimiento(a) && !obtenerClaseEnCurso(a.nombre)).length;
   const labsEnMant         = laboratorios.filter(a => estaEnMantenimiento(a)).length;
 
-  const totalEnMantenimiento = aulasEnMant + labsEnMant;
+  const totalExclusivas      = zonasExclusivas.length;
+  const exclusivasEnUso      = zonasExclusivas.filter(a => !estaEnMantenimiento(a) && (!!obtenerEventoEnCurso(a.nombre) || !!obtenerClaseEnCurso(a.nombre))).length;
+  const exclusivasDisponibles = zonasExclusivas.filter(a => !estaEnMantenimiento(a) && !obtenerEventoEnCurso(a.nombre) && !obtenerClaseEnCurso(a.nombre)).length;
+  const exclusivasEnMant     = zonasExclusivas.filter(a => estaEnMantenimiento(a)).length;
+
+  const totalEnMantenimiento = aulasEnMant + labsEnMant + exclusivasEnMant;
 
   // Nombres de aulas disponibles para el dropdown de aula temporal
   const nombresAulas = aulas.map(a => a.nombre).filter(n => n !== modalMantAula?.nombre);
@@ -646,6 +707,9 @@ export default function GestionAulas() {
                   ))}
                 </div>
               </div>
+              {renderToggleExclusiva(formData.es_exclusiva_reservas, (val) =>
+                setFormData(prev => ({ ...prev, es_exclusiva_reservas: val }))
+              )}
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setMostrarFormulario(false)} className="flex-1 py-2.5 rounded-xl border border-[#c5c6cf]/50 text-sm font-bold text-[#44464e] hover:bg-[#f4f3f6] transition-all">Cancelar</button>
                 <button type="submit" className="flex-1 bg-[#1c355e] text-white py-2.5 rounded-xl font-bold hover:bg-[#152a4a] transition-all flex items-center justify-center gap-1.5">
@@ -745,6 +809,9 @@ export default function GestionAulas() {
                     ))}
                   </div>
                 </div>
+                {renderToggleExclusiva(formEditar.es_exclusiva_reservas, (val) =>
+                  setFormEditar(prev => ({ ...prev, es_exclusiva_reservas: val }))
+                )}
                 <div className="flex gap-3 pt-1">
                   <button
                     type="button"
@@ -902,6 +969,7 @@ export default function GestionAulas() {
                 { id: 'todos',        label: 'Todos los Espacios', icon: 'grid_view' },
                 { id: 'aulas',        label: 'Aulas',             icon: 'meeting_room' },
                 { id: 'laboratorios', label: 'Laboratorios',      icon: 'science' },
+                { id: 'exclusivas',   label: 'Exclusivos',        icon: 'stars' },
                 { id: 'mantenimiento',label: 'Mantenimiento',     icon: 'construction' },
               ].map(tab => (
                 <button
@@ -1089,10 +1157,16 @@ export default function GestionAulas() {
                       <h2 className="text-2xl font-bold text-[#1b1c1e]">{aula.nombre}</h2>
                       {claseActiva && <span className="w-2.5 h-2.5 rounded-full bg-blue-500 flex-shrink-0 shadow-sm" />}
                     </div>
-                    {/* Badge de Turno de Ocupación */}
-                    {ocupacion[aula.nombre] && (ocupacion[aula.nombre].matutino || ocupacion[aula.nombre].vespertino) ? (
-                      <div className="flex items-center gap-1 mt-1">
-                        {ocupacion[aula.nombre].matutino && ocupacion[aula.nombre].vespertino ? (
+                    {/* Badge de Turno de Ocupación o Zona Exclusiva */}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      {esExclusiva(aula) && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-[#fdbb11]/20 text-[#1c355e] border border-[#fdbb11]/60">
+                          <span className="material-symbols-outlined text-[12px] text-[#b88200]">stars</span>
+                          Exclusivo · Reservas
+                        </span>
+                      )}
+                      {ocupacion[aula.nombre] && (ocupacion[aula.nombre].matutino || ocupacion[aula.nombre].vespertino) ? (
+                        ocupacion[aula.nombre].matutino && ocupacion[aula.nombre].vespertino ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200/80">
                             <span className="material-symbols-outlined text-[11px]">routine</span>
                             Ambos Turnos
@@ -1107,11 +1181,11 @@ export default function GestionAulas() {
                             <span className="material-symbols-outlined text-[11px]">nights_stay</span>
                             Turno Vespertino
                           </span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-[10px] font-medium text-slate-400 mt-1">Sin turnos asignados</span>
-                    )}
+                        )
+                      ) : !esExclusiva(aula) ? (
+                        <span className="text-[10px] font-medium text-slate-400">Sin turnos asignados</span>
+                      ) : null}
+                    </div>
                   </div>
                   {mantProg && aula.inicio_mantenimiento && (
                     <p className="text-[10px] text-yellow-700 font-semibold flex items-center gap-1 mt-0.5">
@@ -1281,12 +1355,16 @@ export default function GestionAulas() {
                   )}
 
                   {/* ── Estado de Disponibilidad Actual ── */}
-                  {!enMant && !claseActiva && (
+                  {!enMant && !claseActiva && !eventoActivo && (
                     <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center gap-3">
                       <span className="material-symbols-outlined text-emerald-500 text-[20px]">check_circle</span>
                       <div>
                         <p className="text-[11px] font-black text-emerald-600 uppercase tracking-wide">Disponible</p>
-                        <p className="text-[10px] text-emerald-500 font-medium">El aula se encuentra desocupada en este momento</p>
+                        <p className="text-[10px] text-emerald-500 font-medium">
+                          {esExclusiva(aula)
+                            ? 'Zona exclusiva disponible para reservaciones'
+                            : 'El aula se encuentra desocupada en este momento'}
+                        </p>
                       </div>
                     </div>
                   )}
@@ -1449,6 +1527,29 @@ export default function GestionAulas() {
             <p className="text-[11px] text-[#75777f] font-semibold mt-1">{labsDisponibles} libres</p>
           </div>
 
+          {/* Zonas Exclusivas (Reservas) */}
+          <div
+            onClick={() => { setFiltroTipo(filtroTipo === 'exclusivas' ? 'todos' : 'exclusivas'); setFiltroEstado('todos'); }}
+            className={`bg-gradient-to-r from-[#fdbb11] to-[#e8a906] text-[#1c355e] p-4 rounded-2xl shadow-md cursor-pointer transition-all hover:scale-[1.02] ${
+              filtroTipo === 'exclusivas' && filtroEstado === 'todos' ? 'ring-4 ring-[#fdbb11]/50 shadow-xl' : ''
+            }`}
+            title="Haz clic para ver las Zonas Exclusivas para Reservas (Jardín, Salones Audiovisuales, etc.)"
+          >
+            <div className="flex justify-between items-center">
+              <p className="text-xs font-extrabold uppercase flex items-center gap-1">
+                <span className="material-symbols-outlined text-[15px]">stars</span>
+                Zonas Exclusivas
+              </p>
+              {filtroTipo === 'exclusivas' && filtroEstado === 'todos' && (
+                <span className="text-[10px] bg-[#1c355e]/15 px-2 py-0.5 rounded-full font-extrabold">Filtrado</span>
+              )}
+            </div>
+            <p className="text-4xl font-extrabold mt-1">{totalExclusivas}</p>
+            <p className="text-[11px] font-bold opacity-85 mt-1">
+              {exclusivasDisponibles} disponibles · {exclusivasEnUso} en reserva
+            </p>
+          </div>
+
           {/* Espacios en Mantenimiento */}
           <div
             onClick={() => { setFiltroTipo(filtroTipo === 'mantenimiento' ? 'todos' : 'mantenimiento'); setFiltroEstado('todos'); }}
@@ -1466,7 +1567,7 @@ export default function GestionAulas() {
 
           {/* Capacidad Total (Aulas) */}
           <div
-            onClick={() => setFiltro('aulas')}
+            onClick={() => setFiltroTipo('aulas')}
             className="bg-white border border-[#c5c6cf]/30 p-4 rounded-2xl shadow-sm flex flex-col items-center xl:items-start text-center xl:text-left cursor-pointer transition-all hover:scale-[1.02]"
             title="Haz clic para filtrar las Aulas"
           >
