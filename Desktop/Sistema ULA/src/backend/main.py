@@ -8047,39 +8047,119 @@ def _construir_html_recordatorio_evento(
     acomodo: Optional[str] = None,
     sillas_panel: int = 0,
 ) -> str:
-    desc_html = f"<p style='margin:6px 0;color:#475569;'><b>Descripción:</b> {descripcion}</p>" if descripcion else ""
-    acomodo_html = f"<p style='margin:6px 0;color:#475569;'>🪑 <b>Acomodo:</b> {acomodo}</p>" if acomodo else ""
-    panel_html = f"<p style='margin:6px 0;color:#475569;'>👥 <b>Sillas mesa panel:</b> {sillas_panel}</p>" if sillas_panel and int(sillas_panel) > 0 else ""
-    return f"""
-    <html><body style="font-family:'Segoe UI',Arial,sans-serif;background:#f4f6fb;padding:32px;margin:0;">
-      <div style="max-width:520px;margin:auto;background:#fff;border-radius:20px;padding:36px;box-shadow:0 8px 30px rgba(0,0,0,.07);border:1px solid #e2e8f0;">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-          <div style="background:#1c355e;color:#fdbb11;font-weight:900;font-size:18px;padding:8px 14px;border-radius:12px;display:inline-block;">ULA</div>
-          <span style="color:#1c355e;font-size:20px;font-weight:800;vertical-align:middle;margin-left:8px;">SIPREF</span>
-        </div>
-        <h2 style="color:#1c355e;margin:0 0 6px 0;font-size:20px;">Recordatorio de Reserva de Aula</h2>
-        <p style="color:#64748b;font-size:13px;margin:0 0 24px 0;">Sistema de Gestión de Prefectura — Universidad Latino</p>
+    from html import escape
 
-        <div style="background:#f8fafc;border-left:4px solid #fdbb11;padding:20px;border-radius:12px;margin-bottom:24px;border:1px solid #e2e8f0;border-left-width:4px;">
-          <p style="margin:4px 0 10px 0;font-size:16px;color:#0e2045;font-weight:bold;">{nombre_evento} <span style="font-size:12px;background:#e0e7ff;color:#3730a3;padding:2px 8px;border-radius:6px;font-weight:600;">{tipo_evento or 'Evento'}</span></p>
-          <p style="margin:6px 0;color:#334155;font-size:14px;">📍 <b>Aula / Espacio:</b> <strong style="color:#1c355e;">{aula_nombre}</strong></p>
-          <p style="margin:6px 0;color:#334155;font-size:14px;">📅 <b>Fecha:</b> {fecha_str}</p>
-          <p style="margin:6px 0;color:#334155;font-size:14px;">⏰ <b>Horario:</b> {hora_ini} - {hora_f} hrs</p>
-          <p style="margin:6px 0;color:#334155;font-size:14px;">👤 <b>Responsable:</b> {responsable}</p>
-          {acomodo_html}
-          {panel_html}
-          {desc_html}
-        </div>
+    def _fila_detalle(etiqueta: str, valor: str, destacado: bool = False) -> str:
+        estilo_valor = (
+            "color:#1c355e;font-weight:700;"
+            if destacado
+            else "color:#0f172a;font-weight:500;"
+        )
+        return (
+            f"<tr>"
+            f"<td style=\"padding:10px 0;border-bottom:1px solid #e2e8f0;width:38%;color:#64748b;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;vertical-align:top;\">{escape(etiqueta)}</td>"
+            f"<td style=\"padding:10px 0 10px 12px;border-bottom:1px solid #e2e8f0;font-size:14px;line-height:1.45;vertical-align:top;{estilo_valor}\">{escape(valor)}</td>"
+            f"</tr>"
+        )
 
-        <p style="color:#64748b;font-size:12px;line-height:1.5;margin:0 0 16px 0;">
-          Este recordatorio se genera automáticamente según la anticipación configurada en SIPREF.
-        </p>
-        <div style="border-top:1px solid #f1f5f9;padding-top:16px;text-align:center;">
-          <p style="color:#94a3b8;font-size:11px;margin:0;">© 2026 Universidad Latino · SIPREF Prefectura</p>
-        </div>
-      </div>
-    </body></html>
-    """
+    filas = [
+        _fila_detalle("Espacio", aula_nombre or "Por definir", destacado=True),
+        _fila_detalle("Fecha", fecha_str or "—"),
+        _fila_detalle("Horario", f"{hora_ini} - {hora_f} hrs"),
+        _fila_detalle("Responsable", responsable or "—"),
+    ]
+    if acomodo and str(acomodo).strip():
+        filas.append(_fila_detalle("Acomodo", str(acomodo).strip()))
+    if sillas_panel and int(sillas_panel) > 0:
+        filas.append(_fila_detalle("Sillas mesa panel", str(int(sillas_panel))))
+    if descripcion and str(descripcion).strip():
+        filas.append(_fila_detalle("Descripción", str(descripcion).strip()))
+
+    filas_html = "".join(filas)
+    nombre_esc = escape(nombre_evento or "Reservación")
+    tipo_esc = escape(tipo_evento or "Evento")
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8" /></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f1f5f9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+          <!-- Encabezado institucional -->
+          <tr>
+            <td style="background-color:#1c355e;padding:20px 28px;border-bottom:3px solid #fdbb11;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="vertical-align:middle;">
+                    <span style="display:inline-block;background-color:#fdbb11;color:#1c355e;font-weight:800;font-size:13px;letter-spacing:0.6px;padding:5px 10px;border-radius:6px;vertical-align:middle;">ULA</span>
+                    <span style="color:#ffffff;font-size:16px;font-weight:700;letter-spacing:0.4px;margin-left:10px;vertical-align:middle;">SIPREF</span>
+                  </td>
+                  <td align="right" style="vertical-align:middle;color:#cbd5e1;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;">
+                    Universidad Latino
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Cuerpo -->
+          <tr>
+            <td style="padding:28px 28px 24px 28px;">
+              <p style="margin:0 0 6px 0;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#64748b;">
+                Notificación de reservación
+              </p>
+              <h1 style="margin:0 0 8px 0;font-size:21px;line-height:1.3;font-weight:700;color:#0f172a;">
+                Recordatorio de evento programado
+              </h1>
+              <p style="margin:0 0 22px 0;font-size:14px;line-height:1.55;color:#475569;">
+                Le recordamos que cuenta con una reservación próxima registrada en el Sistema de Gestión de Prefectura.
+              </p>
+
+              <!-- Tarjeta del evento -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-left:4px solid #1c355e;border-radius:8px;">
+                <tr>
+                  <td style="padding:18px 20px 10px 20px;">
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td style="padding-bottom:14px;border-bottom:1px solid #cbd5e1;">
+                          <div style="font-size:17px;font-weight:700;color:#0f172a;line-height:1.35;margin-bottom:6px;">
+                            {nombre_esc}
+                          </div>
+                          <span style="display:inline-block;background-color:#e2e8f0;color:#1e293b;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:3px 9px;border-radius:4px;">
+                            {tipo_esc}
+                          </span>
+                        </td>
+                      </tr>
+                    </table>
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:4px;">
+                      {filas_html}
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:20px 0 0 0;font-size:12px;line-height:1.55;color:#64748b;">
+                Este aviso se envía automáticamente conforme a la anticipación configurada en SIPREF. Para cualquier ajuste, comuníquese con Prefectura.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Pie institucional -->
+          <tr>
+            <td style="background-color:#f8fafc;border-top:1px solid #e2e8f0;padding:14px 28px;text-align:center;">
+              <p style="margin:0;font-size:11px;color:#94a3b8;">
+                © 2026 Universidad Latino · Sistema de Gestión de Prefectura (SIPREF)
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
 
 
 def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
