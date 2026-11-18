@@ -56,20 +56,37 @@ export default function AgendarEventoModal({
 
   const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
-  // Cargar aulas si no vienen en props
+  const esNombreExclusivoPorDefecto = (nombre) => {
+    const n = (nombre || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return n.includes('jardin') || n.includes('audiovisual') || /^sa\d+\b/.test(n);
+  };
+
+  const esEspacioExclusivoReserva = (aula) =>
+    typeof aula?.es_exclusiva_reservas === 'boolean'
+      ? aula.es_exclusiva_reservas
+      : esNombreExclusivoPorDefecto(aula?.nombre);
+
+  // Cargar aulas siempre actualizadas al abrir el modal o cambiar props
   useEffect(() => {
     if (aulasList && aulasList.length > 0) {
       setAulasInternas(aulasList);
-    } else {
-      fetch(`${API_URL}/api/aulas`)
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) setAulasInternas(data);
-        })
-        .catch(err => console.error('Error al cargar aulas en modal:', err));
     }
+    if (!isOpen && aulasList && aulasList.length > 0) return;
+    fetch(`${API_URL}/api/aulas`)
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) setAulasInternas(data);
+      })
+      .catch(err => console.error('Error al cargar aulas en modal:', err));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aulasList.length]);
+  }, [isOpen, aulasList.length]);
+
+  const listaBaseAulas = aulasInternas.length > 0 ? aulasInternas : aulasList;
+  const aulasExclusivas = listaBaseAulas.filter(esEspacioExclusivoReserva);
+  const aulasDisponibles =
+    eventoAEditar?.aula_nombre && !aulasExclusivas.some(a => a.nombre === eventoAEditar.aula_nombre)
+      ? [...aulasExclusivas, ...listaBaseAulas.filter(a => a.nombre === eventoAEditar.aula_nombre)]
+      : aulasExclusivas;
 
   // Cargar catálogo compartido de materiales y plantillas de evento cuando abre el modal
   useEffect(() => {
@@ -96,11 +113,10 @@ export default function AgendarEventoModal({
     const mes = String(refDate.getMonth() + 1).padStart(2, '0');
     const dia = String(refDate.getDate()).padStart(2, '0');
     const hoyISO = `${anio}-${mes}-${dia}`;
-    const lista = aulasList.length > 0 ? aulasList : aulasInternas;
     setFormData({
       tipo_evento: '',
       nombre_evento: '',
-      aula_nombre: lista.length > 0 ? lista[0].nombre : '',
+      aula_nombre: aulasExclusivas.length > 0 ? aulasExclusivas[0].nombre : '',
       fecha: hoyISO,
       hora_inicio: '10:00',
       hora_fin: '12:00',
@@ -165,6 +181,17 @@ export default function AgendarEventoModal({
     setPlantillaEnEdicion(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, eventoAEditar?.id]);
+
+  // Sincronizar aula inicial exclusiva cuando terminan de cargar las aulas
+  useEffect(() => {
+    if (!isOpen || eventoAEditar) return;
+    if (aulasExclusivas.length === 0) return;
+    const existeEnExclusivas = aulasExclusivas.some(a => a.nombre === formData.aula_nombre);
+    if (!formData.aula_nombre || !existeEnExclusivas) {
+      setFormData(prev => ({ ...prev, aula_nombre: aulasExclusivas[0].nombre }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, eventoAEditar?.id, aulasExclusivas.length]);
 
   if (!isOpen) return null;
 
@@ -335,8 +362,6 @@ export default function AgendarEventoModal({
       setGuardando(false);
     }
   };
-
-  const aulasDisponibles = aulasList.length > 0 ? aulasList : aulasInternas;
 
   const alternarRecursoEnMapa = (setter, recursoId, marcado) => {
     setter(prev => {
