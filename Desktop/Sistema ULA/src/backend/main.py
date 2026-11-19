@@ -10819,7 +10819,7 @@ def _detectar_url_vercel_relay(request: Request) -> Optional[str]:
         if parsed.scheme in ("http", "https") and parsed.netloc and host not in ("localhost", "127.0.0.1"):
             return f"{parsed.scheme}://{parsed.netloc}/api/send-email"
 
-    return None
+    return "https://sistema-ula.vercel.app/api/send-email"
 
 
 @app.post("/api/incidencias/exportar-email")
@@ -10987,42 +10987,62 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
     enviado_exitoso = False
     error_smtp = None
 
-    if sender_email and smtp_pass:
+    # 1. Intentar relay /api/send-email en Vercel primero (soporta adjuntos PDF/Excel por TLS 465 sin bloqueo)
+    relay_candidates = []
+    detected_relay = _detectar_url_vercel_relay(request)
+    if detected_relay:
+        relay_candidates.append(detected_relay)
+    relay_candidates.extend([
+        "https://sistema-ula.vercel.app/api/send-email",
+        "https://sipref-ula.vercel.app/api/send-email",
+    ])
+    import base64
+    relay_payload = json.dumps({
+        "raw_mime_b64": base64.b64encode(msg.as_bytes()).decode("ascii"),
+        "recipients": all_recipients,
+        "from_email": sender_email,
+    }).encode("utf-8")
+
+    vistos_relay = set()
+    for relay_url in relay_candidates:
+        if relay_url in vistos_relay:
+            continue
+        vistos_relay.add(relay_url)
         try:
-            # Timeout corto (4s) para detectar rápidamente si Render bloquea el puerto SMTP
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=4.0) as server:
-                server.starttls()
+            relay_req = urllib.request.Request(
+                relay_url,
+                data=relay_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "SIPREF-Backend/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(relay_req, timeout=15.0) as relay_res:
+                if 200 <= relay_res.status < 300:
+                    enviado_exitoso = True
+                    print(f"Reporte de incidencias enviado exitosamente vía relay Vercel ({relay_url}).")
+                    break
+        except Exception as e_relay:
+            print(f"Relay Vercel ({relay_url}) falló ({e_relay}), probando siguiente opción...")
+
+    # 2. Si el relay Vercel no respondió, intentar SMTP directo (465 SSL y 587 STARTTLS)
+    if not enviado_exitoso and sender_email and smtp_pass:
+        try:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=4.0) as server:
                 server.login(sender_email, smtp_pass)
-                server.sendmail(sender_email, all_recipients, msg.as_string())
+                server.sendmail(sender_email, all_recipients, msg.as_bytes())
             enviado_exitoso = True
-        except Exception as e:
-            error_smtp = str(e)
-    # Si SMTP directo falla en Render, intentar relay /api/send-email en Vercel para conservar adjuntos
-    if not enviado_exitoso:
-        relay_url = _detectar_url_vercel_relay(request)
-        if relay_url:
+        except Exception as e_465:
+            error_smtp = str(e_465)
             try:
-                import base64
-                relay_payload = json.dumps({
-                    "raw_mime_b64": base64.b64encode(msg.as_bytes()).decode("ascii"),
-                    "recipients": all_recipients,
-                    "from_email": sender_email,
-                }).encode("utf-8")
-                relay_req = urllib.request.Request(
-                    relay_url,
-                    data=relay_payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": "SIPREF-Backend/1.0",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(relay_req, timeout=15.0) as relay_res:
-                    if 200 <= relay_res.status < 300:
-                        enviado_exitoso = True
-                        print(f"Reporte de incidencias enviado exitosamente vía relay Vercel ({relay_url}).")
-            except Exception as e_relay:
-                print(f"Relay Vercel falló ({e_relay}), intentando API HTTPS Brevo / EmailJS...")
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=4.0) as server:
+                    server.starttls()
+                    server.login(sender_email, smtp_pass)
+                    server.sendmail(sender_email, all_recipients, msg.as_bytes())
+                enviado_exitoso = True
+            except Exception as e_587:
+                error_smtp = str(e_587)
 
     # Si SMTP directo y relay Vercel fallan, intentar API HTTPS de Brevo (soporta adjuntos PDF/Excel por puerto 443)
     if not enviado_exitoso:

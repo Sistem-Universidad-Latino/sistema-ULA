@@ -448,11 +448,25 @@ export default function ReporteIncidencias() {
         usuario_correo: correoUsuario,
       };
 
-      const res = await fetch('/api/incidencias/exportar-email', {
+      let res = await fetch('/api/incidencias/exportar-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
+      // Fallback al endpoint directo del backend si la función serverless local/Vercel devolvió error
+      if (!res.ok) {
+        try {
+          const fallbackRes = await fetch('https://sistema-ula-backend-18ld.onrender.com/api/incidencias/exportar-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (fallbackRes.ok) {
+            res = fallbackRes;
+          }
+        } catch {}
+      }
 
       const data = await res.json().catch(() => ({}));
 

@@ -1,4 +1,4 @@
-`'use strict';
+'use strict';
 
 const tls = require('node:tls');
 const crypto = require('node:crypto');
@@ -279,8 +279,28 @@ function buildMultipartMime({
   return headers.join('\r\n');
 }
 
+async function fetchWithRetry(url, retries = 3, delayMs = 2000) {
+  let lastErr;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url);
+      if (res.status >= 502 && res.status <= 504 && i < retries - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (i < retries - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  throw lastErr || new Error('No se pudo conectar al backend: ' + url);
+}
+
 async function fetchJson(url) {
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error('Error al consultar backend (' + res.status + '): ' + (errText || url));
@@ -289,7 +309,7 @@ async function fetchJson(url) {
 }
 
 async function fetchBuffer(url) {
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error('Error al descargar archivo del backend (' + res.status + '): ' + (errText || url));
@@ -364,7 +384,7 @@ module.exports = async function handler(req, res) {
     const ccoList = splitEmails(body.cco);
     const allRecipients = [...destinos, ...ccList, ...ccoList];
 
-    const backendBase = (process.env.BACKEND_URL || DEFAULT_BACKEND_URL).replace(/\\/+$/, '');
+    const backendBase = (process.env.BACKEND_URL || DEFAULT_BACKEND_URL).replace(/\/+$/, '');
     const baseParams = new URLSearchParams();
     if (body.fecha_inicio) baseParams.set('fecha_inicio', body.fecha_inicio);
     if (body.fecha_fin) baseParams.set('fecha_fin', body.fecha_fin);
@@ -505,4 +525,3 @@ module.exports = async function handler(req, res) {
     });
   }
 };
-`
