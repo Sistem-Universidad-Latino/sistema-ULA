@@ -122,6 +122,11 @@ export default function AgendaEventos({ aulasList = [] }) {
   const [motivoCancelar, setMotivoCancelar] = useState('Cancelación por reorganización de espacio');
   const [cancelando, setCancelando] = useState(false);
 
+  // Selección múltiple para eliminar eventos
+  const [modoSeleccionEliminar, setModoSeleccionEliminar] = useState(false);
+  const [eventosSeleccionadosIds, setEventosSeleccionadosIds] = useState([]);
+  const [eliminandoSeleccionados, setEliminandoSeleccionados] = useState(false);
+
   // Centro de Exportación
   const [mostrarCentroExportacion, setMostrarCentroExportacion] = useState(false);
   const [filtrosExport, setFiltrosExport] = useState({
@@ -298,6 +303,7 @@ export default function AgendaEventos({ aulasList = [] }) {
           if (eventoDetalle && eventoDetalle.id === ev.id) {
             setEventoDetalle(null);
           }
+          setEventosSeleccionadosIds(prev => prev.filter(id => String(id) !== String(ev.id)));
           fetchEventos();
         } else {
           Swal.fire({
@@ -314,6 +320,94 @@ export default function AgendaEventos({ aulasList = [] }) {
           text: 'No se pudo comunicar con el servidor para eliminar el evento.'
         });
       }
+    }
+  };
+
+  const toggleSeleccionEventoEliminar = (eventoId) => {
+    const idStr = String(eventoId);
+    setEventosSeleccionadosIds(prev =>
+      prev.some(id => String(id) === idStr)
+        ? prev.filter(id => String(id) !== idStr)
+        : [...prev, idStr]
+    );
+  };
+
+  const handleEliminarEventosSeleccionados = async () => {
+    if (eventosSeleccionadosIds.length === 0) return;
+    const seleccionados = eventos.filter(ev =>
+      eventosSeleccionadosIds.some(id => String(id) === String(ev.id))
+    );
+    const total = seleccionados.length || eventosSeleccionadosIds.length;
+    const listaNombres = seleccionados
+      .slice(0, 6)
+      .map(ev => `<li style="text-align:left;margin-bottom:2px;">• <b>${ev.nombre_evento}</b> <span style="color:#64748b;">(Aula ${ev.aula_nombre} · ${ev.fecha})</span></li>`)
+      .join('');
+    const masTexto = seleccionados.length > 6
+      ? `<li style="text-align:left;color:#64748b;">...y ${seleccionados.length - 6} evento(s) más</li>`
+      : '';
+
+    const result = await Swal.fire({
+      title: `¿Eliminar ${total} evento${total !== 1 ? 's' : ''}?`,
+      html: `Se eliminarán permanentemente de la base de datos y se liberarán sus aulas:<ul style="margin:10px 0 8px 12px;font-size:12px;">${listaNombres}${masTexto}</ul><span style="font-size:12px;color:#ef4444;font-weight:700;">Esta acción no se puede deshacer.</span>`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#ef4444',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: `Sí, eliminar (${total})`,
+      cancelButtonText: 'Cancelar',
+      reverseButtons: true,
+    });
+
+    if (!result.isConfirmed) return;
+
+    setEliminandoSeleccionados(true);
+    let eliminadosOk = 0;
+    let errores = 0;
+    try {
+      for (const idStr of eventosSeleccionadosIds) {
+        try {
+          const res = await fetch(`${API_URL}/api/eventos/${encodeURIComponent(idStr)}`, {
+            method: 'DELETE',
+          });
+          if (res.ok) {
+            eliminadosOk++;
+          } else {
+            errores++;
+          }
+        } catch {
+          errores++;
+        }
+      }
+
+      if (eventoDetalle && eventosSeleccionadosIds.some(id => String(id) === String(eventoDetalle.id))) {
+        setEventoDetalle(null);
+      }
+
+      setEventosSeleccionadosIds([]);
+      setModoSeleccionEliminar(false);
+      await fetchEventos();
+
+      if (eliminadosOk > 0) {
+        Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: errores > 0 ? 'warning' : 'success',
+          title:
+            errores > 0
+              ? `Se eliminaron ${eliminadosOk} evento(s) (${errores} con error)`
+              : `${eliminadosOk} evento${eliminadosOk !== 1 ? 's' : ''} eliminado${eliminadosOk !== 1 ? 's' : ''} correctamente`,
+          showConfirmButton: false,
+          timer: 3500,
+        });
+      } else {
+        Swal.fire({
+          icon: 'error',
+          title: 'Error',
+          text: 'No se pudieron eliminar los eventos seleccionados.',
+        });
+      }
+    } finally {
+      setEliminandoSeleccionados(false);
     }
   };
 
@@ -631,6 +725,95 @@ export default function AgendaEventos({ aulasList = [] }) {
           </div>
 
         </div>
+
+        {/* BARRA DE SELECCIÓN MÚLTIPLE PARA ELIMINAR EVENTOS */}
+        {(() => {
+          const listaVisibles = eventos.filter(ev => {
+            const est = obtenerEstadoEvento(ev, ahora);
+            if (filtroEstado !== 'todos' && est.toLowerCase() !== filtroEstado.toLowerCase()) return false;
+            if (vistaAgenda === 'calendario') {
+              return String(ev.fecha || '').slice(0, 10) === diaSeleccionado;
+            }
+            return true;
+          });
+          const idsVisibles = listaVisibles.map(ev => String(ev.id));
+          const todosVisiblesSeleccionados =
+            idsVisibles.length > 0 &&
+            idsVisibles.every(id => eventosSeleccionadosIds.some(selId => String(selId) === id));
+
+          return (
+            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs text-slate-500 font-semibold">
+                <span className="material-symbols-outlined text-base text-slate-400">event_note</span>
+                <span>
+                  {vistaAgenda === 'calendario'
+                    ? `${listaVisibles.length} evento${listaVisibles.length !== 1 ? 's' : ''} en ${diaSeleccionado}`
+                    : `${listaVisibles.length} evento${listaVisibles.length !== 1 ? 's' : ''} mostrado${listaVisibles.length !== 1 ? 's' : ''}`}
+                </span>
+              </div>
+
+              {!modoSeleccionEliminar ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModoSeleccionEliminar(true);
+                    setEventosSeleccionadosIds([]);
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl border border-red-200 bg-red-50/60 hover:bg-red-100 text-red-600 text-xs font-extrabold flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                  Seleccionar para eliminar
+                </button>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={idsVisibles.length === 0}
+                    onClick={() => {
+                      if (todosVisiblesSeleccionados) {
+                        setEventosSeleccionadosIds(prev =>
+                          prev.filter(id => !idsVisibles.includes(String(id)))
+                        );
+                      } else {
+                        setEventosSeleccionadosIds(prev => {
+                          const setIds = new Set(prev.map(String));
+                          idsVisibles.forEach(id => setIds.add(id));
+                          return Array.from(setIds);
+                        });
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {todosVisiblesSeleccionados ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={eventosSeleccionadosIds.length === 0 || eliminandoSeleccionados}
+                    onClick={handleEliminarEventosSeleccionados}
+                    className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">delete</span>
+                    {eliminandoSeleccionados
+                      ? 'Eliminando...'
+                      : `Eliminar seleccionados (${eventosSeleccionadosIds.length})`}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModoSeleccionEliminar(false);
+                      setEventosSeleccionadosIds([]);
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* VISTA CALENDARIO MENSUAL O TARJETAS DE EVENTOS */}
@@ -864,11 +1047,21 @@ export default function AgendaEventos({ aulasList = [] }) {
                     const estadoEfectivo = obtenerEstadoEvento(ev, ahora);
                     const badge = getBadgeEstado(estadoEfectivo);
                     const esDeReservas = ev.origen === 'SIPREF Reservas' || String(ev.id).startsWith('res-');
+                    const estaSeleccionado = eventosSeleccionadosIds.some(id => String(id) === String(ev.id));
                     return (
                       <div
                         key={`cal-det-${ev.id}`}
+                        onClick={() => {
+                          if (modoSeleccionEliminar) {
+                            toggleSeleccionEventoEliminar(ev.id);
+                          }
+                        }}
                         className={`rounded-2xl p-4 border transition-all flex flex-col justify-between space-y-3 ${
-                          estadoEfectivo === 'Cancelado'
+                          modoSeleccionEliminar ? 'cursor-pointer select-none ' : ''
+                        }${
+                          modoSeleccionEliminar && estaSeleccionado
+                            ? 'border-red-500 ring-2 ring-red-200 bg-red-50/30'
+                            : estadoEfectivo === 'Cancelado'
                             ? 'border-red-200 bg-red-50/20 opacity-85'
                             : estadoEfectivo === 'En curso'
                             ? 'border-emerald-400 bg-emerald-50/10'
@@ -880,6 +1073,15 @@ export default function AgendaEventos({ aulasList = [] }) {
                         <div>
                           <div className="flex items-start justify-between gap-2 mb-2">
                             <div className="flex flex-wrap items-center gap-1.5">
+                              {modoSeleccionEliminar && (
+                                <input
+                                  type="checkbox"
+                                  checked={estaSeleccionado}
+                                  onChange={() => toggleSeleccionEventoEliminar(ev.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-4 h-4 rounded border-red-300 text-red-600 focus:ring-red-500 cursor-pointer accent-red-600"
+                                />
+                              )}
                               <span className="px-2.5 py-0.5 bg-slate-100 text-slate-700 font-bold text-[10px] rounded-full uppercase">
                                 {ev.tipo_evento}
                               </span>
@@ -909,7 +1111,10 @@ export default function AgendaEventos({ aulasList = [] }) {
                         <div className="pt-2.5 border-t border-slate-200/70 flex items-center justify-between">
                           <button
                             type="button"
-                            onClick={() => handleVerDetalle(ev)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleVerDetalle(ev);
+                            }}
                             className="text-xs font-bold text-[#1c355e] hover:underline flex items-center gap-1 cursor-pointer"
                           >
                             <span className="material-symbols-outlined text-sm">visibility</span>
@@ -919,7 +1124,10 @@ export default function AgendaEventos({ aulasList = [] }) {
                             {estadoEfectivo !== 'Cancelado' && estadoEfectivo !== 'Finalizado' && (
                               <button
                                 type="button"
-                                onClick={() => handleEditar(ev)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditar(ev);
+                                }}
                                 className="text-slate-400 hover:text-[#1c355e] p-1 rounded cursor-pointer"
                                 title="Editar evento"
                               >
@@ -928,7 +1136,10 @@ export default function AgendaEventos({ aulasList = [] }) {
                             )}
                             <button
                               type="button"
-                              onClick={() => handleEliminarEvento(ev)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEliminarEvento(ev);
+                              }}
                               className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
                               title="Eliminar evento"
                             >
@@ -966,11 +1177,21 @@ export default function AgendaEventos({ aulasList = [] }) {
               const estadoEfectivo = obtenerEstadoEvento(ev, ahora);
               const badge = getBadgeEstado(estadoEfectivo);
               const esDeReservas = ev.origen === 'SIPREF Reservas' || String(ev.id).startsWith('res-');
+              const estaSeleccionado = eventosSeleccionadosIds.some(id => String(id) === String(ev.id));
               return (
                 <div
                   key={ev.id}
+                  onClick={() => {
+                    if (modoSeleccionEliminar) {
+                      toggleSeleccionEventoEliminar(ev.id);
+                    }
+                  }}
                   className={`bg-white rounded-3xl p-6 border transition-all flex flex-col justify-between space-y-4 ${
-                    estadoEfectivo === 'Cancelado'
+                    modoSeleccionEliminar ? 'cursor-pointer select-none ' : ''
+                  }${
+                    modoSeleccionEliminar && estaSeleccionado
+                      ? 'border-red-500 ring-2 ring-red-200 bg-red-50/25 shadow-md'
+                      : estadoEfectivo === 'Cancelado'
                       ? 'border-red-200 bg-red-50/20 opacity-80'
                       : estadoEfectivo === 'En curso'
                       ? 'border-emerald-400 ring-2 ring-emerald-200/70 shadow-md bg-emerald-50/10'
@@ -983,6 +1204,15 @@ export default function AgendaEventos({ aulasList = [] }) {
                     {/* CABECERA TARJETA */}
                     <div className="flex items-start justify-between gap-2 mb-3">
                       <div className="flex flex-wrap items-center gap-1.5">
+                        {modoSeleccionEliminar && (
+                          <input
+                            type="checkbox"
+                            checked={estaSeleccionado}
+                            onChange={() => toggleSeleccionEventoEliminar(ev.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-4 h-4 rounded border-red-300 text-red-600 focus:ring-red-500 cursor-pointer accent-red-600 mr-0.5"
+                          />
+                        )}
                         <span className="px-3 py-1 bg-slate-100 text-slate-700 font-bold text-[11px] rounded-full uppercase tracking-wider">
                           {ev.tipo_evento}
                         </span>
@@ -1040,7 +1270,10 @@ export default function AgendaEventos({ aulasList = [] }) {
                   {/* ACCIONES TARJETA */}
                   <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-2">
                     <button
-                      onClick={() => handleVerDetalle(ev)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleVerDetalle(ev);
+                      }}
                       className="text-xs font-bold text-[#1c355e] hover:bg-slate-100 px-3 py-2 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
                     >
                       <span className="material-symbols-outlined text-base">visibility</span> Detalle / Historial
@@ -1050,14 +1283,20 @@ export default function AgendaEventos({ aulasList = [] }) {
                       {estadoEfectivo !== 'Cancelado' && estadoEfectivo !== 'Finalizado' && (
                         <>
                           <button
-                            onClick={() => handleEditar(ev)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditar(ev);
+                            }}
                             className="p-2 text-slate-500 hover:text-[#1c355e] hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
                             title="Editar evento"
                           >
                             <span className="material-symbols-outlined text-lg">edit</span>
                           </button>
                           <button
-                            onClick={() => setModalCancelar(ev)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setModalCancelar(ev);
+                            }}
                             className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-all cursor-pointer"
                             title="Cancelar evento"
                           >
@@ -1066,7 +1305,10 @@ export default function AgendaEventos({ aulasList = [] }) {
                         </>
                       )}
                       <button
-                        onClick={() => handleEliminarEvento(ev)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEliminarEvento(ev);
+                        }}
                         className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all cursor-pointer"
                         title="Eliminar evento permanentemente"
                       >
