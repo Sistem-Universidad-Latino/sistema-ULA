@@ -583,28 +583,9 @@ def enviar_correo_otp(correo_destino: str, codigo: str, nombre: str):
       </div>
     </body></html>
     """
-    sender_email = os.getenv("SMTP_USER", "")
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
-    smtp_pass = os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "")
-
-    if sender_email and smtp_pass:
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = f"SIPREF ULA <{sender_email}>"
-            msg['To'] = correo_destino
-            msg['Subject'] = "Código de verificación — SIPREF ULA"
-            msg.attach(MIMEText(html, 'html'))
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=4.0) as server:
-                server.starttls()
-                server.login(sender_email, smtp_pass)
-                server.sendmail(sender_email, [correo_destino], msg.as_string())
-            return
-        except Exception as e:
-            print(f"SMTP fallo para OTP, probando EmailJS fallback: {e}")
-
-    # Fallback si falla SMTP o si no hay credenciales SMTP
-    _enviar_smtp(correo_destino, "Código de verificación — SIPREF ULA", html)
+    ok = enviar_correo_generico(correo_destino, "Código de verificación — SIPREF ULA", html)
+    if not ok:
+        raise RuntimeError("No se pudo enviar el código de verificación por correo.")
 
 # Configuración de CORS para permitir la conexión desde Vite (React)
 app.add_middleware(
@@ -3334,29 +3315,9 @@ def recuperar_contrasena(datos: RecuperarContrasena):
           </div>
         </body></html>
         """
-        sender_email = os.getenv("SMTP_USER", "")
-        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-        smtp_pass = os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "")
-
-        enviado_smtp = False
-        if sender_email and smtp_pass:
-            try:
-                msg = MIMEMultipart()
-                msg['From'] = sender_email
-                msg['To'] = correo_limpio
-                msg['Subject'] = "Restablecer contraseña — SIPREF ULA"
-                msg.attach(MIMEText(html_reset, 'html'))
-                with smtplib.SMTP(smtp_host, smtp_port) as server:
-                    server.starttls()
-                    server.login(sender_email, smtp_pass)
-                    server.sendmail(sender_email, [correo_limpio], msg.as_string())
-                enviado_smtp = True
-            except Exception as smtp_err:
-                print(f"SMTP fallo para restablecer contraseña, intentando EmailJS: {smtp_err}")
-
-        if not enviado_smtp:
-            _enviar_smtp(correo_limpio, "Restablecer contraseña — SIPREF ULA", html_reset)
+        ok_reset = enviar_correo_generico(correo_limpio, "Restablecer contraseña — SIPREF ULA", html_reset)
+        if not ok_reset:
+            raise RuntimeError("No se pudo enviar el correo de recuperación por SMTP ni relay Vercel.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"No se pudo enviar el correo: {str(e)}")
 
@@ -7926,8 +7887,9 @@ async def enviar_examenes_por_correo(body: dict):
 # =========================================================================
 
 def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
-    """Envía un correo usando SMTP directo (465/587), relay /api/send-email en Vercel o fallback EmailJS."""
+    """Envía un correo usando relay /api/send-email en Vercel o SMTP directo (465/587), con logo inline CID y sin EmailJS."""
     import base64
+    from email.mime.image import MIMEImage
 
     dest_limpio = (correo_destino or "").strip()
     if not dest_limpio or "@" not in dest_limpio:
@@ -7938,14 +7900,27 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
     smtp_port = int(os.getenv("SMTP_PORT", 587))
     smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "") or "from lcxt muzd wugb").strip()
 
-    msg = MIMEMultipart()
+    msg = MIMEMultipart('related')
     msg['From'] = f'"SIPREF ULA" <{sender_email}>'
     msg['To'] = dest_limpio
     msg['Subject'] = asunto
     msg.attach(MIMEText(html_content, 'html', 'utf-8'))
+
+    if "cid:logo_ula" in (html_content or ""):
+        logo_path = os.path.join(base_dir, "logo.png")
+        if os.path.exists(logo_path):
+            try:
+                with open(logo_path, "rb") as f_logo:
+                    img_part = MIMEImage(f_logo.read(), _subtype="png")
+                img_part.add_header("Content-ID", "<logo_ula>")
+                img_part.add_header("Content-Disposition", "inline", filename="logo.png")
+                msg.attach(img_part)
+            except Exception as e_logo:
+                print(f"Advertencia adjuntando logo institucional inline: {e_logo}")
+
     raw_bytes = msg.as_bytes()
 
-    # 1. Relay serverless en Vercel (/api/send-email) — preserva siempre el remitente "SIPREF ULA" <...>
+    # 1. Relay serverless en Vercel (/api/send-email) — preserva siempre el remitente "SIPREF ULA" <...> e imágenes inline
     relay_candidates = []
     for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
         val = (os.getenv(env_key, "") or "").strip()
@@ -7977,7 +7952,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
                 headers={"Content-Type": "application/json", "User-Agent": "SIPREF-Backend/1.0"},
                 method="POST",
             )
-            with urllib.request.urlopen(req_relay, timeout=8.0) as resp:
+            with urllib.request.urlopen(req_relay, timeout=12.0) as resp:
                 if 200 <= resp.status < 300:
                     return True
         except Exception as e_rel:
@@ -7986,7 +7961,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
     if sender_email and smtp_pass:
         # 2a. Intentar SMTP SSL 465 directo
         try:
-            with smtplib.SMTP_SSL(smtp_host, 465, timeout=3.5) as server:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=5.0) as server:
                 server.login(sender_email, smtp_pass)
                 server.sendmail(sender_email, [dest_limpio], raw_bytes)
             return True
@@ -7995,21 +7970,15 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
 
         # 2b. Intentar SMTP STARTTLS 587 directo
         try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=3.5) as server:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=5.0) as server:
                 server.starttls()
                 server.login(sender_email, smtp_pass)
                 server.sendmail(sender_email, [dest_limpio], raw_bytes)
             return True
         except Exception as e_587:
-            print(f"SMTP {smtp_port} no disponible ({e_587}), probando fallback EmailJS...")
+            print(f"SMTP {smtp_port} no disponible ({e_587}).")
 
-    # 3. Fallback EmailJS
-    try:
-        _enviar_smtp(dest_limpio, asunto, html_content)
-        return True
-    except Exception as e:
-        print(f"Error en envío de correo fallback: {e}")
-        return False
+    return False
 
 
 def _formatear_hora_hhmm(val) -> str:
@@ -8156,12 +8125,12 @@ def _construir_html_recordatorio_evento(
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
           <!-- Encabezado institucional -->
           <tr>
-            <td style="background-color:#1c355e;padding:20px 28px;border-bottom:3px solid #fdbb11;">
+            <td style="background-color:#1c355e;padding:18px 28px;border-bottom:3px solid #fdbb11;">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                 <tr>
                   <td style="vertical-align:middle;">
-                    <span style="display:inline-block;background-color:#fdbb11;color:#1c355e;font-weight:800;font-size:13px;letter-spacing:0.6px;padding:5px 10px;border-radius:6px;vertical-align:middle;">ULA</span>
-                    <span style="color:#ffffff;font-size:16px;font-weight:700;letter-spacing:0.4px;margin-left:10px;vertical-align:middle;">SIPREF</span>
+                    <img src="cid:logo_ula" alt="Universidad Latino" width="44" height="44" style="display:inline-block;width:44px;height:44px;object-fit:contain;vertical-align:middle;background-color:#ffffff;padding:4px;border-radius:8px;" />
+                    <span style="color:#ffffff;font-size:17px;font-weight:700;letter-spacing:0.4px;margin-left:12px;vertical-align:middle;">SIPREF</span>
                   </td>
                   <td align="right" style="vertical-align:middle;color:#cbd5e1;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;">
                     Universidad Latino
@@ -11185,19 +11154,12 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
             except Exception as e_brevo:
                 print(f"Brevo API falló ({e_brevo}), intentando fallback HTTP vía EmailJS...")
 
-    # Si SMTP y relay Vercel no funcionaron, enviar vía EmailJS (puerto 443 HTTPS)
+    # No usar EmailJS para conservar siempre los archivos adjuntos reales
     if not enviado_exitoso:
-        try:
-            for dest in all_recipients:
-                _enviar_smtp(dest, asunto, body_html)
-            enviado_exitoso = True
-            print("Reporte de incidencias enviado exitosamente vía EmailJS HTTP fallback.")
-        except Exception as e_fb:
-            print(f"Error en fallback EmailJS: {e_fb}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"No se pudo enviar el correo por SMTP ({error_smtp or 'puerto bloqueado'}) ni por EmailJS ({e_fb})."
-            )
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo enviar el correo con adjuntos por relay Vercel ni SMTP ({error_smtp or 'puerto bloqueado'})."
+        )
 
     try:
         _registrar_auditoria_exportacion(
