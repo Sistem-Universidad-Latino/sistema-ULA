@@ -1,17 +1,44 @@
 import { Component } from 'react';
 
+const CHUNK_RELOAD_KEY = 'sipref_chunk_reload_at';
+
+function esErrorDeChunk(error) {
+  const msg = String(error?.message || error || '');
+  return (
+    msg.includes('Failed to fetch dynamically imported module') ||
+    msg.includes('Importing a module script failed') ||
+    msg.includes('error loading dynamically imported module') ||
+    msg.includes('Loading chunk') ||
+    error?.name === 'ChunkLoadError'
+  );
+}
+
 export default class ErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, errorMessage: '' };
   }
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error) {
+    return { hasError: true, errorMessage: error?.message || '' };
   }
 
   componentDidCatch(error, info) {
-    console.error('ErrorBoundary capturó:', error, info.componentStack);
+    console.error('ErrorBoundary capturó:', error, info?.componentStack);
+
+    // Si es un error por chunk desactualizado tras un despliegue en Vercel,
+    // recargar automáticamente una sola vez para obtener el index.html y bundles nuevos.
+    if (esErrorDeChunk(error)) {
+      try {
+        const lastReload = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) || 0);
+        if (Date.now() - lastReload > 15000) {
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+          window.location.reload();
+        }
+      } catch {
+        // Ignorar errores de sessionStorage
+      }
+    }
   }
 
   render() {
@@ -26,7 +53,7 @@ export default class ErrorBoundary extends Component {
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="bg-[#1c355e] text-white px-6 py-3 rounded-xl font-bold hover:bg-[#152a4a] transition-all text-sm"
+              className="bg-[#1c355e] text-white px-6 py-3 rounded-xl font-bold hover:bg-[#152a4a] transition-all text-sm cursor-pointer"
             >
               Recargar página
             </button>

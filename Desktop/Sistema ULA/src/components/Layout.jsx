@@ -8,7 +8,7 @@ import { API_URL } from '../config/api';
 
 export default function Layout() {
   const location = useLocation();
-  const { usuario } = useUser();
+  const { usuario, limpiarUsuario } = useUser();
   const ahora = useTime();
 
   // Estado para controlar el menú en celulares y tablets
@@ -46,11 +46,13 @@ export default function Layout() {
       try {
         // Obtener ciclo actual para filtrar
         const cicloRes = await fetch(`${API_URL}/api/ciclos-disponibles?fecha=${fechaActualStr}`);
-        const cicloData = await cicloRes.json();
+        if (!cicloRes.ok) return;
+        const cicloData = await cicloRes.json().catch(() => ({}));
         const cicloActual = cicloData.ciclo_actual || '';
 
         const res = await fetch(`${API_URL}/api/calendarios?ciclo_escolar=${cicloActual}`);
-        const cargados = await res.json();
+        if (!res.ok) return;
+        const cargados = await res.json().catch(() => []);
         
         if (!Array.isArray(cargados)) {
           setCalendariosPendientes(requeridos);
@@ -80,8 +82,8 @@ export default function Layout() {
           fetch(`${API_URL}/api/estado-academico?plan=semestral&fecha=${fechaActualStr}`),
           fetch(`${API_URL}/api/estado-academico?plan=cuatrimestral&fecha=${fechaActualStr}`)
         ]);
-        const dataSem = await resSem.json();
-        const dataCuat = await resCuat.json();
+        const dataSem = resSem.ok ? await resSem.json().catch(() => null) : null;
+        const dataCuat = resCuat.ok ? await resCuat.json().catch(() => null) : null;
         
         setEstadoAcademico({
           semestral: dataSem?.estado ? dataSem : null,
@@ -431,6 +433,7 @@ export default function Layout() {
     localStorage.removeItem('usuarioLogueado');
     localStorage.removeItem('sesionFecha');
     sessionStorage.clear();
+    if (limpiarUsuario) limpiarUsuario();
   };
 
   const isActive = (path) =>
@@ -762,7 +765,7 @@ export default function Layout() {
             </p>
           </div>
           <Link to="/configuracion-perfil" className="h-8 w-8 sm:h-10 sm:w-10 flex-shrink-0 rounded-full bg-[#0e2045] text-white flex items-center justify-center border border-[#c5c6cf]/30 font-bold text-sm sm:text-lg uppercase shadow-sm hover:scale-105 hover:bg-[#1c355e] transition-all cursor-pointer" title="Configuración de Perfil">
-            {usuario.nombre.charAt(0)}
+            {(usuario?.nombre || 'U').charAt(0)}
           </Link>
         </div>
       </header>

@@ -27,6 +27,21 @@ window.fetch = async function(...args) {
   return originalFetch.apply(this, args);
 };
 
+// Recuperación automática si Vite falla al precargar un chunk tras un despliegue nuevo en Vercel
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault();
+  try {
+    const key = 'sipref_preload_reload_at';
+    const lastReload = Number(sessionStorage.getItem(key) || 0);
+    if (Date.now() - lastReload > 15000) {
+      sessionStorage.setItem(key, String(Date.now()));
+      window.location.reload();
+    }
+  } catch {
+    window.location.reload();
+  }
+});
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <App />

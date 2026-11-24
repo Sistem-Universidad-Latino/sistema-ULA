@@ -8,16 +8,36 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Registro from './pages/Registro';
 
+// Helper para imports lazy tolerantes a despliegues nuevos en Vercel (evita ChunkLoadError al navegar tras login)
+function lazyWithRetry(importFn) {
+  return lazy(() =>
+    importFn().catch((err) => {
+      const key = 'sipref_lazy_reload_at';
+      try {
+        const lastReload = Number(sessionStorage.getItem(key) || 0);
+        if (Date.now() - lastReload > 15000) {
+          sessionStorage.setItem(key, String(Date.now()));
+          window.location.reload();
+          return new Promise(() => {});
+        }
+      } catch {
+        // Ignorar errores de sessionStorage
+      }
+      throw err;
+    })
+  );
+}
+
 // Code splitting: cada página se carga solo cuando se navega a ella
-const VisualBd          = lazy(() => import('./pages/VisualBd'));
-const GestionHorarios   = lazy(() => import('./pages/GestionHorarios'));
-const GestionAulas      = lazy(() => import('./pages/GestionAulas'));
-const GestionDocentes   = lazy(() => import('./pages/GestionDocentes'));
-const Calendarios       = lazy(() => import('./pages/Calendarios'));
-const ReporteIncidencias = lazy(() => import('./pages/ReporteIncidencias'));
-const ConfiguracionPerfil = lazy(() => import('./pages/ConfiguracionPerfil'));
-const ManualUsuario       = lazy(() => import('./pages/ManualUsuario'));
-const SoporteTecnico      = lazy(() => import('./pages/SoporteTecnico'));
+const VisualBd            = lazyWithRetry(() => import('./pages/VisualBd'));
+const GestionHorarios     = lazyWithRetry(() => import('./pages/GestionHorarios'));
+const GestionAulas        = lazyWithRetry(() => import('./pages/GestionAulas'));
+const GestionDocentes     = lazyWithRetry(() => import('./pages/GestionDocentes'));
+const Calendarios         = lazyWithRetry(() => import('./pages/Calendarios'));
+const ReporteIncidencias  = lazyWithRetry(() => import('./pages/ReporteIncidencias'));
+const ConfiguracionPerfil = lazyWithRetry(() => import('./pages/ConfiguracionPerfil'));
+const ManualUsuario       = lazyWithRetry(() => import('./pages/ManualUsuario'));
+const SoporteTecnico      = lazyWithRetry(() => import('./pages/SoporteTecnico'));
 
 // Variable para activar el modo de mantenimiento
 const EN_MANTENIMIENTO = false;
@@ -37,12 +57,22 @@ function MantenimientoPagina() {
 }
 
 
+function obtenerFechaLocalYYYYMMDD() {
+  const ahora = new Date();
+  const y = ahora.getFullYear();
+  const m = String(ahora.getMonth() + 1).padStart(2, '0');
+  const d = String(ahora.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function RutaProtegida({ children }) {
   const usuario = localStorage.getItem('usuarioLogueado');
   const sesionFecha = localStorage.getItem('sesionFecha');
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoyLocal = obtenerFechaLocalYYYYMMDD();
+  const hoyUtc = new Date().toISOString().slice(0, 10);
 
-  if (!usuario || !sesionFecha || sesionFecha !== hoy) {
+  // Aceptar fecha local o UTC del día en curso para no expulsar sesiones recién creadas en el cambio de zona horaria
+  if (!usuario || !sesionFecha || (sesionFecha !== hoyLocal && sesionFecha !== hoyUtc)) {
     // Sesión inexistente, expirada (otro día), o sin fecha → limpiar y redirigir
     localStorage.removeItem('usuarioLogueado');
     localStorage.removeItem('sesionFecha');

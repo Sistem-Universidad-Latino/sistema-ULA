@@ -2165,6 +2165,7 @@ def eliminar_evento_calendario(evento_id: int):
 
 
 @app.get("/ping")
+@app.get("/api/ping")
 def ping():
     return {"status": "ok", "message": "Servidor activo"}
 

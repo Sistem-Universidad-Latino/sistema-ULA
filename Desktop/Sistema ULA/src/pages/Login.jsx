@@ -1,8 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import logo from '../components/logo.png';
 import { useToast, ToastContainer } from '../components/useToast';
 import { useUser } from '../components/UserContext';
+
+function obtenerFechaLocalYYYYMMDD() {
+  const ahora = new Date();
+  const y = ahora.getFullYear();
+  const m = String(ahora.getMonth() + 1).padStart(2, '0');
+  const d = String(ahora.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -13,6 +21,12 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [cargandoLogin, setCargandoLogin] = useState(false);
+  const [mensajeCargaLogin, setMensajeCargaLogin] = useState('Iniciando sesión...');
+
+  // Despertar el backend en Render silenciosamente al abrir la pantalla de login
+  useEffect(() => {
+    fetch('/api/ping').catch(() => {});
+  }, []);
 
   // Estado del modal de recuperación
   const [mostrarModal, setMostrarModal] = useState(false);
@@ -26,6 +40,7 @@ export default function Login() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setCargandoLogin(true);
+    setMensajeCargaLogin('Iniciando sesión...');
     try {
       let finalEmail = email.trim().toLowerCase();
       
@@ -40,26 +55,63 @@ export default function Login() {
         finalEmail += '@universidadlatino.edu.mx';
       }
 
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ correo: finalEmail, password })
-      });
-      const data = await response.json();
-      if (response.ok) {
+      const maxIntentos = 3;
+      let response = null;
+      let data = null;
+
+      for (let intento = 1; intento <= maxIntentos; intento++) {
+        try {
+          if (intento > 1) {
+            setMensajeCargaLogin(`Conectando con el servidor (${intento}/${maxIntentos})...`);
+          }
+          response = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ correo: finalEmail, password })
+          });
+
+          // Si Render está despertando (502/503/504), reintentar automáticamente antes de mostrar error
+          if ([502, 503, 504].includes(response.status) && intento < maxIntentos) {
+            await new Promise((r) => setTimeout(r, intento * 2500));
+            continue;
+          }
+
+          const rawText = await response.text();
+          try {
+            data = rawText ? JSON.parse(rawText) : {};
+          } catch {
+            // Respuesta HTML inesperada (ej. página de arranque de Render/Vercel)
+            if (intento < maxIntentos) {
+              await new Promise((r) => setTimeout(r, intento * 2500));
+              continue;
+            }
+            throw new Error('Respuesta no válida del servidor');
+          }
+          break;
+        } catch (errIntento) {
+          if (intento < maxIntentos) {
+            await new Promise((r) => setTimeout(r, intento * 2500));
+            continue;
+          }
+          throw errIntento;
+        }
+      }
+
+      if (response && response.ok && data?.usuario) {
         localStorage.setItem('usuarioLogueado', JSON.stringify(data.usuario));
-        localStorage.setItem('sesionFecha', new Date().toISOString().slice(0, 10));
+        localStorage.setItem('sesionFecha', obtenerFechaLocalYYYYMMDD());
         actualizarUsuario(data.usuario);
         toast(`Bienvenido/a al sistema, ${data.usuario.nombre}`, "exito");
         navigate('/dashboard');
       } else {
-        toast(data.detail || "Credenciales inválidas.", "error");
+        toast(data?.detail || "Credenciales inválidas.", "error");
       }
     } catch (error) {
-      toast("Error de conexión con el servidor.", "error");
+      toast("Error de conexión con el servidor. Intenta de nuevo en unos segundos.", "error");
       console.error(error);
     } finally {
       setCargandoLogin(false);
+      setMensajeCargaLogin('Iniciando sesión...');
     }
   };
 
@@ -194,7 +246,7 @@ export default function Login() {
 
             <div className="pt-4">
               <button type="submit" disabled={cargandoLogin} className={`w-full text-white text-sm font-semibold py-4 rounded-xl shadow-md flex items-center justify-center gap-2 transition-all ${cargandoLogin ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#1c355e] hover:bg-[#1c355e]/90'}`}>
-                <span>{cargandoLogin ? 'Iniciando sesión...' : 'Iniciar Sesión'}</span>
+                <span>{cargandoLogin ? mensajeCargaLogin : 'Iniciar Sesión'}</span>
                 {!cargandoLogin && <span className="material-symbols-outlined text-[20px]">arrow_forward</span>}
               </button>
             </div>

@@ -69,10 +69,24 @@ fs.writeFileSync(
       routes: [
         { src: '^/api/send-email$', dest: '/api/send-email' },
         { src: '^/api/incidencias/exportar-email$', dest: '/api/send-email' },
+        {
+          src: '^/assets/(.*)$',
+          headers: { 'Cache-Control': 'public, max-age=31536000, immutable' },
+          continue: true,
+        },
+        {
+          src: '^/(index\\.html)?$',
+          headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+          continue: true,
+        },
         { handle: 'filesystem' },
         { src: '^/api/(.*)$', dest: 'https://sistema-ula-backend-18ld.onrender.com/api/$1' },
         { src: '^/upload-pdf$', dest: 'https://sistema-ula-backend-18ld.onrender.com/upload-pdf' },
-        { src: '/(.*)', dest: '/index.html' },
+        {
+          src: '/(.*)',
+          dest: '/index.html',
+          headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+        },
       ],
     },
     null,

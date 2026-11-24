@@ -123,8 +123,12 @@ export function UserProvider({ children }) {
     };
   }, [usuario.id, usuario.correo]);
 
+  const limpiarUsuario = useCallback(() => {
+    setUsuario(inicial());
+  }, []);
+
   return (
-    <UserContext.Provider value={{ usuario, actualizarUsuario }}>
+    <UserContext.Provider value={{ usuario, actualizarUsuario, limpiarUsuario }}>
       {children}
     </UserContext.Provider>
   );

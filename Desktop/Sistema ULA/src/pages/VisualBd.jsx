@@ -406,29 +406,42 @@ export default function VisualBd() {
   const [errorConexion, setErrorConexion] = useState(false);
   const [ultimaSync, setUltimaSync] = useState(null);
 
-  // Fetch horarios (polling cada 30s)
+  // Fetch horarios (polling cada 30s, con reintento automático si Render está despertando)
   useEffect(() => {
-    const fetchDatos = async () => {
+    let cancelado = false;
+    const fetchDatos = async (intento = 1) => {
       try {
         const response = await fetch('/api/horarios');
         if (response.ok) {
           const data = await response.json();
-          setAsignaturas(data);
-          setErrorConexion(false);
-          setUltimaSync(new Date());
-        } else {
+          if (!cancelado) {
+            setAsignaturas(Array.isArray(data) ? data : []);
+            setErrorConexion(false);
+            setUltimaSync(new Date());
+          }
+        } else if ([502, 503, 504].includes(response.status) && intento < 3) {
+          setTimeout(() => { if (!cancelado) fetchDatos(intento + 1); }, intento * 2000);
+          return;
+        } else if (!cancelado) {
           setErrorConexion(true);
         }
       } catch (error) {
+        if (intento < 3 && !cancelado) {
+          setTimeout(() => { if (!cancelado) fetchDatos(intento + 1); }, intento * 2000);
+          return;
+        }
         console.error("Error al cargar la BD:", error);
-        setErrorConexion(true);
+        if (!cancelado) setErrorConexion(true);
       } finally {
-        setCargando(false);
+        if (!cancelado) setCargando(false);
       }
     };
     fetchDatos();
-    const interval = setInterval(fetchDatos, 30000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => fetchDatos(1), 30000);
+    return () => {
+      cancelado = true;
+      clearInterval(interval);
+    };
   }, []);
 
   // Fetch estado academico y examenes de hoy — solo cuando cambia el DÍA (no cada segundo)
@@ -465,7 +478,7 @@ export default function VisualBd() {
   useEffect(() => {
     fetch('/api/aulas')
       .then(r => r.ok ? r.json() : [])
-      .then(data => setAulasData(data))
+      .then(data => setAulasData(Array.isArray(data) ? data : []))
       .catch(() => { });
   }, []);
 
@@ -806,7 +819,7 @@ export default function VisualBd() {
           : filtroEstado === 'proxima'
             ? (ev.estadoTiempo === 'proxima' || ev.estadoTiempo === 'programada')
             : filtroEstado === 'finalizada'
-              ? ev.estadoTiempo === 'finalizada' && ev.fecha_evento === hoyYMD
+              ? ev.estadoTiempo === 'finalizada' && ev.fecha_evento === hoyStr
               : false;
 
       if (!coincideEstado) return false;
