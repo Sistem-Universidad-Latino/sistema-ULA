@@ -278,6 +278,11 @@ def migrar_columnas_verificacion():
                     activo TINYINT(1) NOT NULL DEFAULT 1,
                     creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )""",
+                """CREATE TABLE IF NOT EXISTS sistema_config (
+                    clave VARCHAR(100) PRIMARY KEY,
+                    valor TEXT NOT NULL,
+                    actualizado_en DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )""",
             ]:
                 try:
                     cursor.execute(sentencia)
@@ -500,6 +505,12 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="API SIPREF ULA", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _capturar_relay_vercel_middleware(request: Request, call_next):
+    _registrar_relay_desde_request(request)
+    return await call_next(request)
 
 # Configurar directorio de uploads
 UPLOAD_DIR = os.path.join(base_dir, "uploads", "calendarios")
@@ -6544,21 +6555,7 @@ def _enviar_mime_con_adjuntos(msg: MIMEMultipart, sender_email: str, all_recipie
     raw_bytes = msg.as_bytes()
 
     # 1. Intentar relay /api/send-email en Vercel primero (sin bloqueo de puertos en Render)
-    relay_candidates = []
-    if request is not None:
-        detected_relay = _detectar_url_vercel_relay(request)
-        if detected_relay:
-            relay_candidates.append(detected_relay)
-    for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
-        val = (os.getenv(env_key, "") or "").strip()
-        if val:
-            base = val if val.startswith(("http://", "https://")) else f"https://{val}"
-            base = base.rstrip("/")
-            relay_candidates.append(base if base.endswith("/api/send-email") else f"{base}/api/send-email")
-    relay_candidates.extend([
-        "https://sistema-ula.vercel.app/api/send-email",
-        "https://sipref-ula.vercel.app/api/send-email",
-    ])
+    relay_candidates = _obtener_relay_candidates(request)
 
     relay_payload = json.dumps({
         "raw_mime_b64": base64.b64encode(raw_bytes).decode("ascii"),
@@ -7886,7 +7883,107 @@ async def enviar_examenes_por_correo(body: dict):
 # MÓDULO AGENDA DE EVENTOS DE AULAS (SISTEMA ULA - SIPREF)
 # =========================================================================
 
-def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
+_CACHED_VERCEL_RELAY_URL = ""
+
+
+def _extraer_relay_desde_request(request: Request) -> Optional[str]:
+    """Detecta la URL pública /api/send-email del frontend (Vercel) desde headers de la petición."""
+    from urllib.parse import urlparse
+
+    for header_name in ("x-frontend-origin", "origin", "referer"):
+        header_val = (request.headers.get(header_name) or "").strip()
+        if not header_val:
+            continue
+        parsed = urlparse(header_val)
+        host = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme in ("http", "https")
+            and parsed.netloc
+            and host not in ("localhost", "127.0.0.1")
+            and not host.endswith("onrender.com")
+        ):
+            return f"{parsed.scheme}://{parsed.netloc}/api/send-email"
+
+    fwd_host = (request.headers.get("x-forwarded-host") or "").strip().lower()
+    if fwd_host and fwd_host not in ("localhost", "127.0.0.1") and not fwd_host.endswith("onrender.com"):
+        return f"https://{fwd_host}/api/send-email"
+
+    return None
+
+
+def _persistir_relay_bd(relay_url: str):
+    try:
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO sistema_config (clave, valor)
+                    VALUES ('vercel_relay_url', %s)
+                    ON DUPLICATE KEY UPDATE valor = VALUES(valor)
+                    """,
+                    (relay_url,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def _registrar_relay_desde_request(request: Optional[Request]) -> Optional[str]:
+    global _CACHED_VERCEL_RELAY_URL
+    if request is None:
+        return None
+    relay = _extraer_relay_desde_request(request)
+    if relay and relay != _CACHED_VERCEL_RELAY_URL:
+        _CACHED_VERCEL_RELAY_URL = relay
+        import threading
+        threading.Thread(target=_persistir_relay_bd, args=(relay,), daemon=True).start()
+    return relay
+
+
+def _obtener_relay_candidates(request: Optional[Request] = None) -> list:
+    global _CACHED_VERCEL_RELAY_URL
+    candidates = []
+
+    req_relay = _registrar_relay_desde_request(request)
+    if req_relay:
+        candidates.append(req_relay)
+
+    if not _CACHED_VERCEL_RELAY_URL:
+        try:
+            conn = get_db_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT valor FROM sistema_config WHERE clave = 'vercel_relay_url' LIMIT 1")
+                    row = cur.fetchone()
+                    if row and row.get("valor"):
+                        _CACHED_VERCEL_RELAY_URL = str(row["valor"]).strip()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    if _CACHED_VERCEL_RELAY_URL:
+        candidates.append(_CACHED_VERCEL_RELAY_URL)
+
+    for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
+        val = (os.getenv(env_key, "") or "").strip()
+        if val:
+            base = val if val.startswith(("http://", "https://")) else f"https://{val}"
+            base = base.rstrip("/")
+            candidates.append(base if base.endswith("/api/send-email") else f"{base}/api/send-email")
+
+    candidates.extend([
+        "https://sistema-ula.vercel.app/api/send-email",
+        "https://sipref-ula.vercel.app/api/send-email",
+        "https://sistema-sipref.vercel.app/api/send-email",
+    ])
+    return candidates
+
+
+def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str, request: Optional[Request] = None):
     """Envía un correo usando relay /api/send-email en Vercel o SMTP directo (465/587), con logo inline CID y sin EmailJS."""
     import base64
     from email.mime.image import MIMEImage
@@ -7921,18 +8018,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
     raw_bytes = msg.as_bytes()
 
     # 1. Relay serverless en Vercel (/api/send-email) — preserva siempre el remitente "SIPREF ULA" <...> e imágenes inline
-    relay_candidates = []
-    for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
-        val = (os.getenv(env_key, "") or "").strip()
-        if val:
-            base = val if val.startswith(("http://", "https://")) else f"https://{val}"
-            base = base.rstrip("/")
-            relay_candidates.append(base if base.endswith("/api/send-email") else f"{base}/api/send-email")
-    relay_candidates.extend([
-        "https://sistema-ula.vercel.app/api/send-email",
-        "https://sipref-ula.vercel.app/api/send-email",
-        "https://sistema-sipref.vercel.app/api/send-email",
-    ])
+    relay_candidates = _obtener_relay_candidates(request)
 
     relay_payload = json.dumps({
         "raw_mime_b64": base64.b64encode(raw_bytes).decode("ascii"),
@@ -7942,7 +8028,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
 
     vistos_relay = set()
     for r_url in relay_candidates:
-        if r_url in vistos_relay:
+        if not r_url or r_url in vistos_relay:
             continue
         vistos_relay.add(r_url)
         try:
@@ -7961,7 +8047,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
     if sender_email and smtp_pass:
         # 2a. Intentar SMTP SSL 465 directo
         try:
-            with smtplib.SMTP_SSL(smtp_host, 465, timeout=5.0) as server:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=3.0) as server:
                 server.login(sender_email, smtp_pass)
                 server.sendmail(sender_email, [dest_limpio], raw_bytes)
             return True
@@ -7970,7 +8056,7 @@ def enviar_correo_generico(correo_destino: str, asunto: str, html_content: str):
 
         # 2b. Intentar SMTP STARTTLS 587 directo
         try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=5.0) as server:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=3.0) as server:
                 server.starttls()
                 server.login(sender_email, smtp_pass)
                 server.sendmail(sender_email, [dest_limpio], raw_bytes)
@@ -8275,10 +8361,10 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
         cursor.execute("""
             UPDATE reservas_recordatorios r
             JOIN reservas_reservaciones rr ON r.reservacion_id = rr.id
-            SET r.intentos = 3,
+            SET r.intentos = 10,
                 r.ultimo_error = 'Evento finalizado antes de procesar recordatorio'
             WHERE r.enviado_en IS NULL
-              AND COALESCE(r.intentos, 0) < 3
+              AND COALESCE(r.intentos, 0) < 10
               AND rr.fin < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
         """)
         connection.commit()
@@ -8293,7 +8379,8 @@ def _procesar_recordatorios_pendientes_una_vez(cursor, connection):
             JOIN reservas_reservaciones rr ON r.reservacion_id = rr.id
             LEFT JOIN reservas_usuarios ru ON rr.creado_por = ru.google_sub
             WHERE r.enviado_en IS NULL
-              AND COALESCE(r.intentos, 0) < 3
+              AND COALESCE(r.intentos, 0) < 10
+              AND COALESCE(r.ultimo_error, '') != 'Evento finalizado antes de procesar recordatorio'
               AND r.enviar_en <= UTC_TIMESTAMP()
               AND rr.estado = 'PROGRAMADA'
               AND rr.fin >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
@@ -9964,21 +10051,53 @@ def api_eliminar_evento(evento_id: str):
 
 
 @app.post("/api/eventos/probar-correo")
-def api_probar_correo_evento(correo: str, evento_nombre: str = "Conferencia de Prueba"):
-    html_prueba = f"""
-    <html><body style="font-family:'Segoe UI',Arial,sans-serif;background:#f4f6fb;padding:32px;margin:0;">
-      <div style="max-width:480px;margin:auto;background:#fff;border-radius:20px;padding:32px;box-shadow:0 8px 30px rgba(0,0,0,.08);border:1px solid #e2e8f0;">
-        <h2 style="color:#1c355e;margin:0 0 4px 0;">Prueba de Recordatorio — SIPREF</h2>
-        <p style="color:#64748b;font-size:13px;margin:0 0 20px 0;">Universidad Latino</p>
-        <p style="color:#334155;line-height:1.6;">Este es un correo de prueba enviado exitosamente desde el backend de SIPREF para el evento: <b style="color:#1c355e;">{evento_nombre}</b>.</p>
-        <div style="background:#f8fafc;padding:12px;border-radius:10px;border-left:4px solid #10b981;margin:16px 0;">
-          <p style="margin:0;color:#065f46;font-size:12px;font-weight:600;">Servicio de correo SMTP verificado y listo para operar.</p>
-        </div>
-        <p style="color:#94a3b8;font-size:11px;margin-top:24px;text-align:center;">Este correo es únicamente informativo.</p>
-      </div>
-    </body></html>
-    """
-    ok = enviar_correo_generico(correo, f"Prueba de Recordatorio de evento — {evento_nombre}", html_prueba)
+def api_probar_correo_evento(correo: str, request: Request, evento_nombre: str = "Conferencia de Prueba"):
+    from html import escape
+
+    evento_esc = escape(evento_nombre or "Conferencia de Prueba")
+    html_prueba = f"""<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8" /></head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1e293b;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#f1f5f9;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:520px;background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;">
+          <tr>
+            <td style="background-color:#1c355e;padding:18px 28px;border-bottom:3px solid #fdbb11;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td style="vertical-align:middle;">
+                    <img src="cid:logo_ula" alt="Universidad Latino" width="44" height="44" style="display:inline-block;width:44px;height:44px;object-fit:contain;vertical-align:middle;background-color:#ffffff;padding:4px;border-radius:8px;" />
+                    <span style="color:#ffffff;font-size:17px;font-weight:700;letter-spacing:0.4px;margin-left:12px;vertical-align:middle;">SIPREF</span>
+                  </td>
+                  <td align="right" style="vertical-align:middle;color:#cbd5e1;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;">
+                    Universidad Latino
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px;">
+              <p style="margin:0 0 6px 0;font-size:11px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;color:#64748b;">Prueba de recordatorio</p>
+              <h2 style="color:#0f172a;margin:0 0 12px 0;font-size:20px;">Correo de prueba verificado</h2>
+              <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 18px 0;">
+                Este es un correo de prueba enviado desde SIPREF para el evento: <b style="color:#1c355e;">{evento_esc}</b>.
+              </p>
+              <div style="background:#f0fdf4;padding:12px 16px;border-radius:8px;border-left:4px solid #10b981;">
+                <p style="margin:0;color:#065f46;font-size:12px;font-weight:700;">Servicio de correo SMTP verificado y listo para operar.</p>
+              </div>
+              <p style="color:#94a3b8;font-size:11px;margin:24px 0 0 0;text-align:center;">© 2026 Universidad Latino · SIPREF</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+    ok = enviar_correo_generico(correo, f"Prueba de Recordatorio de evento — {evento_nombre} — SIPREF ULA", html_prueba, request=request)
     if ok:
         return {"success": True, "message": f"Correo de prueba enviado exitosamente a {correo}"}
     else:
@@ -11049,14 +11168,7 @@ def exportar_incidencias_email(req: ExportarIncidenciasEmailRequest, request: Re
     error_smtp = None
 
     # 1. Intentar relay /api/send-email en Vercel primero (soporta adjuntos PDF/Excel por TLS 465 sin bloqueo)
-    relay_candidates = []
-    detected_relay = _detectar_url_vercel_relay(request)
-    if detected_relay:
-        relay_candidates.append(detected_relay)
-    relay_candidates.extend([
-        "https://sistema-ula.vercel.app/api/send-email",
-        "https://sipref-ula.vercel.app/api/send-email",
-    ])
+    relay_candidates = _obtener_relay_candidates(request)
     import base64
     relay_payload = json.dumps({
         "raw_mime_b64": base64.b64encode(msg.as_bytes()).decode("ascii"),

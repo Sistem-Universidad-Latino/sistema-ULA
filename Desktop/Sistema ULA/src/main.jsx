@@ -18,9 +18,11 @@ window.fetch = async function(...args) {
     } catch (e) {}
     
     config = config || {};
+    const frontendOrigin = typeof window !== 'undefined' && window.location ? window.location.origin : '';
     config.headers = {
       ...config.headers,
-      'X-Usuario': encodeURIComponent(userName)
+      'X-Usuario': encodeURIComponent(userName),
+      ...(frontendOrigin ? { 'X-Frontend-Origin': frontendOrigin } : {}),
     };
     args[1] = config;
   }
