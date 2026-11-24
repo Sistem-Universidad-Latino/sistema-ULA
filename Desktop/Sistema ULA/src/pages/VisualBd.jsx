@@ -1102,11 +1102,25 @@ export default function VisualBd() {
       toast("Especifica al menos un destinatario", "error");
       return;
     }
+    if (!formEmail.adjuntar_pdf && !formEmail.adjuntar_excel) {
+      toast("Selecciona al menos un formato para adjuntar (PDF o Excel)", "error");
+      return;
+    }
     setEnviandoEmail(true);
+    let nombreUsuario = 'Prefectura';
+    let correoUsuario = '';
+    try {
+      const rawUser = localStorage.getItem('usuarioLogueado');
+      if (rawUser) {
+        const parsed = JSON.parse(rawUser);
+        nombreUsuario = parsed.nombre_completo || parsed.nombre || 'Prefectura';
+        correoUsuario = parsed.correo || parsed.email || '';
+      }
+    } catch {}
     try {
       let bodyData = {
-        usuario_nombre: 'Administrador',
-        usuario_correo: 'admin@universidadlatino.edu.mx',
+        usuario_nombre: nombreUsuario,
+        usuario_correo: correoUsuario,
         destinatarios: formEmail.destinatarios,
         cc: formEmail.cc,
         cco: formEmail.cco,

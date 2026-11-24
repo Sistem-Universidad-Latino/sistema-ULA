@@ -6567,6 +6567,91 @@ def descargar_reporte_compartido(report_id: str):
     return Response(content=data["contenido"], media_type=media_type, headers=headers)
 
 
+def _enviar_mime_con_adjuntos(msg: MIMEMultipart, sender_email: str, all_recipients: list, request: Optional[Request] = None):
+    """
+    Envía un correo MIME completo con archivos adjuntos reales (PDF/Excel) usando
+    el mismo método que Incidencias:
+      1. Relay HTTPS /api/send-email en Vercel (TLS 465 hacia Gmail, conserva adjuntos reales).
+      2. SMTP directo (SSL 465 y STARTTLS 587) para entornos locales o donde SMTP esté abierto.
+    No utiliza EmailJS para garantizar que siempre lleguen los archivos adjuntos reales.
+    """
+    import base64
+
+    smtp_host = (os.getenv("SMTP_HOST", "").strip() or "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "") or "from lcxt muzd wugb").strip()
+    raw_bytes = msg.as_bytes()
+
+    # 1. Intentar relay /api/send-email en Vercel primero (sin bloqueo de puertos en Render)
+    relay_candidates = []
+    if request is not None:
+        detected_relay = _detectar_url_vercel_relay(request)
+        if detected_relay:
+            relay_candidates.append(detected_relay)
+    for env_key in ("VERCEL_RELAY_URL", "FRONTEND_URL", "VERCEL_URL"):
+        val = (os.getenv(env_key, "") or "").strip()
+        if val:
+            base = val if val.startswith(("http://", "https://")) else f"https://{val}"
+            base = base.rstrip("/")
+            relay_candidates.append(base if base.endswith("/api/send-email") else f"{base}/api/send-email")
+    relay_candidates.extend([
+        "https://sistema-ula.vercel.app/api/send-email",
+        "https://sipref-ula.vercel.app/api/send-email",
+    ])
+
+    relay_payload = json.dumps({
+        "raw_mime_b64": base64.b64encode(raw_bytes).decode("ascii"),
+        "recipients": all_recipients,
+        "from_email": sender_email,
+    }).encode("utf-8")
+
+    errores = []
+    vistos_relay = set()
+    for relay_url in relay_candidates:
+        if relay_url in vistos_relay:
+            continue
+        vistos_relay.add(relay_url)
+        try:
+            relay_req = urllib.request.Request(
+                relay_url,
+                data=relay_payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "SIPREF-Backend/1.0",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(relay_req, timeout=20.0) as relay_res:
+                if 200 <= relay_res.status < 300:
+                    print(f"Correo con adjuntos enviado exitosamente vía relay Vercel ({relay_url}).")
+                    return True
+        except Exception as e_relay:
+            errores.append(f"Relay {relay_url}: {e_relay}")
+            print(f"Relay Vercel ({relay_url}) falló ({e_relay}), probando siguiente opción...")
+
+    # 2. Fallback: SMTP directo SSL 465 y STARTTLS 587 (conserva adjuntos reales)
+    if sender_email and smtp_pass:
+        try:
+            with smtplib.SMTP_SSL(smtp_host, 465, timeout=6.0) as server:
+                server.login(sender_email, smtp_pass)
+                server.sendmail(sender_email, all_recipients, raw_bytes)
+            print("Correo con adjuntos enviado exitosamente vía SMTP SSL 465.")
+            return True
+        except Exception as e_465:
+            errores.append(f"SMTP 465: {e_465}")
+            try:
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=6.0) as server:
+                    server.starttls()
+                    server.login(sender_email, smtp_pass)
+                    server.sendmail(sender_email, all_recipients, raw_bytes)
+                print(f"Correo con adjuntos enviado exitosamente vía SMTP STARTTLS {smtp_port}.")
+                return True
+            except Exception as e_587:
+                errores.append(f"SMTP {smtp_port}: {e_587}")
+
+    raise RuntimeError("No se pudo enviar el correo con archivos adjuntos. Detalle: " + " | ".join(errores[:3]))
+
+
 @app.post("/api/exportar/email")
 def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
     try:
@@ -6578,7 +6663,7 @@ def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
         cco_list = [d.strip() for d in (req.cco or '').replace(';', ',').split(',') if d.strip()]
 
         fecha_str = datetime.now().strftime("%Y-%m-%d")
-        asunto = req.asunto or f"Reporte de Eventos Académicos ULA - {fecha_str}"
+        asunto = req.asunto or f"Reporte de Horarios y Eventos Académicos — Universidad Latino ({fecha_str})"
 
         dest_str = f"To: {','.join(destinos)}"
         if cc_list: dest_str += f" | CC: {','.join(cc_list)}"
@@ -6587,18 +6672,20 @@ def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
         if origen == "auditoria":
             registros_data = _consultar_bitacora_para_exportacion(req.filtros_bitacora or req.filtros_aplicados)
             es_hist = True
+            titulo_seccion = "Auditoría del Sistema"
         elif origen in ("historial_clases", "historial") or req.es_historial_completo:
             filtros = req.filtros_clases or req.filtros_aplicados or {}
             registros_data = _consultar_historial_para_exportacion(filtros)
             es_hist = True
+            titulo_seccion = "Bitácora de Clases e Incidencias (Histórico)"
         else:
             registros_data = req.registros
             es_hist = False
+            titulo_seccion = "Dashboard Actual (Tiempo Real)"
 
         pdf_bytes = None
         xlsx_bytes = None
-        id_pdf = None
-        id_excel = None
+        archivos_adjuntos_html = []
         filename_pdf = f"Bitacora_Clases_Historico_{fecha_str}.pdf" if es_hist else f"Dashboard_Clases_{fecha_str}.pdf"
         filename_xlsx = f"Bitacora_Clases_Historico_{fecha_str}.xlsx" if es_hist else f"Dashboard_Clases_{fecha_str}.xlsx"
 
@@ -6613,7 +6700,7 @@ def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
                 pdf_bytes = _generar_pdf_reporte(registros_data, req.filtros_aplicados, req.usuario_nombre, es_historial=True)
             else:
                 pdf_bytes = _generar_pdf_reporte(registros_data, req.filtros_aplicados, req.usuario_nombre, es_historial=False)
-            id_pdf = _guardar_reporte_compartido(filename_pdf, "pdf", pdf_bytes)
+            archivos_adjuntos_html.append(f"<li>📄 <strong>PDF Oficial:</strong> {filename_pdf}</li>")
 
         if req.adjuntar_excel:
             if origen == "auditoria":
@@ -6622,69 +6709,61 @@ def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
                 xlsx_bytes = _generar_excel_reporte(registros_data, req.filtros_aplicados, req.usuario_nombre, es_historial=True)
             else:
                 xlsx_bytes = _generar_excel_reporte(registros_data, req.filtros_aplicados, req.usuario_nombre, es_historial=False)
-            id_excel = _guardar_reporte_compartido(filename_xlsx, "xlsx", xlsx_bytes)
+            archivos_adjuntos_html.append(f"<li>📊 <strong>Excel (.xlsx):</strong> {filename_xlsx}</li>")
 
-        backend_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("BACKEND_URL") or str(request.base_url).rstrip('/')
-        if backend_url.endswith('/'):
-            backend_url = backend_url[:-1]
-
-        botones_html = ""
-        if id_pdf:
-            url_pdf = f"{backend_url}/api/reportes/descargar/{id_pdf}"
-            botones_html += f"""
-            <a href="{url_pdf}" style="background-color: #1c355e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 6px; font-size: 14px;">
-                📄 Descargar Reporte PDF
-            </a>
-            """
-        if id_excel:
-            url_excel = f"{backend_url}/api/reportes/descargar/{id_excel}"
-            botones_html += f"""
-            <a href="{url_excel}" style="background-color: #16a34a; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 6px; font-size: 14px;">
-                📊 Descargar Reporte Excel
-            </a>
-            """
+        cant_registros = len(registros_data) if registros_data else 0
+        lista_adjuntos_str = "".join(archivos_adjuntos_html) if archivos_adjuntos_html else "<li>Ningún archivo adjunto</li>"
 
         body_html = f"""
         <html>
         <body style="font-family: Arial, sans-serif; color: #333; background-color: #f4f6fb; padding: 20px;">
-            <div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 24px; border-radius: 10px; border: 1px solid #e0e6ed;">
-                <h2 style="color: #1c355e; margin-top: 0; border-bottom: 2px solid #1c355e; padding-bottom: 12px;">
-                    Reporte de Horarios y Eventos Académicos — ULA
-                </h2>
-                <p style="font-size: 15px;">Hola,</p>
-                <p style="font-size: 15px; color: #475569;">
-                    {req.mensaje or 'El reporte generado por el Sistema de Horarios ULA está listo para su descarga.'}
-                </p>
-                <div style="margin: 28px 0; text-align: center;">
-                    {botones_html}
+            <div style="max-width: 650px; margin: 0 auto; background: #ffffff; padding: 28px; border-radius: 12px; border: 1px solid #e0e6ed; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                <div style="border-bottom: 2px solid #1c355e; padding-bottom: 14px; margin-bottom: 18px;">
+                    <h2 style="color: #1c355e; margin: 0; font-size: 20px;">
+                        UNIVERSIDAD LATINO — SIPREF
+                    </h2>
+                    <p style="color: #d97706; font-weight: bold; margin: 4px 0 0 0; font-size: 13px;">
+                        {titulo_seccion} ({cant_registros} registros)
+                    </p>
                 </div>
+
+                <p style="font-size: 14px; color: #475569; line-height: 1.6;">
+                    {req.mensaje or 'Se adjunta el reporte oficial generado desde el Sistema de Gestión de Prefectura (SIPREF).'}
+                </p>
+
+                <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 18px; margin: 20px 0;">
+                    <p style="margin: 0; color: #166534; font-size: 13px; font-weight: bold;">
+                        📎 Archivo(s) adjunto(s) en este correo:
+                    </p>
+                    <ul style="margin: 6px 0 0 0; padding-left: 20px; color: #15803d; font-size: 12px; line-height: 1.6;">
+                        {lista_adjuntos_str}
+                    </ul>
+                    <p style="margin: 8px 0 0 0; color: #64748b; font-size: 11px;">
+                        Los archivos solicitados se encuentran directamente adjuntos en este mensaje para su descarga directa.
+                    </p>
+                </div>
+
                 <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-                <p style="font-size: 12px; color: #64748b; margin-bottom: 0;">
-                    Generado por <strong>{req.usuario_nombre}</strong> ({req.usuario_correo}) el {datetime.now().strftime('%d/%m/%Y %H:%M')}.
+                <p style="font-size: 11px; color: #94a3b8; margin: 0; line-height: 1.5;">
+                    Reporte emitido por <strong>{req.usuario_nombre}</strong>{f' ({req.usuario_correo})' if req.usuario_correo else ''} el {datetime.now().strftime('%d/%m/%Y %H:%M')}.<br/>
+                    Sistema de Control y Gestión Escolar — Universidad Latino.
                 </p>
             </div>
         </body>
         </html>
         """
 
-        # Intentar envío SMTP si está configurado
-        sender_email = os.getenv("SMTP_USER", "").strip()
-        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-        smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "")).strip()
-
-        if not sender_email:
-            sender_email = "soporte.sipref.software@gmail.com"
+        sender_email = (os.getenv("SMTP_USER", "").strip() or "soporte.sipref.software@gmail.com")
 
         from email.mime.base import MIMEBase
         from email import encoders
-        
+
         msg = MIMEMultipart()
-        msg['From'] = f"Sistema Horarios ULA <{sender_email}>"
+        msg['From'] = f'"SIPREF ULA" <{sender_email}>'
         msg['To'] = ", ".join(destinos)
         if cc_list: msg['Cc'] = ", ".join(cc_list)
         msg['Subject'] = asunto
-        msg.attach(MIMEText(body_html, 'html'))
+        msg.attach(MIMEText(body_html, 'html', 'utf-8'))
 
         if pdf_bytes:
             part = MIMEBase('application', 'pdf')
@@ -6700,28 +6779,10 @@ def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
             part.add_header('Content-Disposition', f'attachment; filename="{filename_xlsx}"')
             msg.attach(part)
 
-        tipo_str = "PDF + Excel" if (pdf_bytes and xlsx_bytes) else ("PDF" if pdf_bytes else ("Excel" if xlsx_bytes else "Enlace"))
-        cant_registros = len(registros_data) if registros_data else 0
+        tipo_str = "PDF + Excel" if (pdf_bytes and xlsx_bytes) else ("PDF" if pdf_bytes else ("Excel" if xlsx_bytes else "Sin adjunto"))
+        all_recipients = list(destinos) + list(cc_list) + list(cco_list)
 
-        enviado_smtp = False
-        if sender_email and smtp_pass:
-            try:
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=15.0) as server:
-                    server.starttls()
-                    server.login(sender_email, smtp_pass)
-                    server.sendmail(sender_email, destinos + cc_list + cco_list, msg.as_string())
-                enviado_smtp = True
-            except Exception as e_smtp:
-                print(f"SMTP directo falló ({e_smtp}), intentando fallback...")
-
-        if not enviado_smtp:
-            try:
-                for dest in (destinos + cc_list + cco_list):
-                    _enviar_smtp(dest, asunto, body_html)
-                enviado_smtp = True
-            except Exception as e_fb:
-                print(f"Fallback EmailJS falló: {e_fb}")
-                raise HTTPException(status_code=500, detail=f"No se pudo enviar el correo: {str(e_fb)}")
+        _enviar_mime_con_adjuntos(msg, sender_email, all_recipients, request=request)
 
         _registrar_auditoria_exportacion(
             req.usuario_nombre,
@@ -6733,7 +6794,7 @@ def enviar_reporte_email(req: EnviarReporteEmailRequest, request: Request):
             enviado_email=True,
             destinatarios=dest_str
         )
-        return {"message": f"Reporte enviado exitosamente a {', '.join(destinos)}"}
+        return {"message": f"Reporte con adjuntos enviado exitosamente a {', '.join(destinos)}"}
     except HTTPException:
         raise
     except Exception as e:
@@ -9267,78 +9328,68 @@ def api_exportar_eventos_email(req: ExportarEventosEmailRequest, request: Reques
     fecha_str = datetime.now().strftime("%Y-%m-%d")
     pdf_bytes = None
     xlsx_bytes = None
-    id_pdf = None
-    id_excel = None
+    archivos_adjuntos_html = []
     filename_pdf = f"Historial_Eventos_{fecha_str}.pdf"
     filename_xlsx = f"Historial_Eventos_{fecha_str}.xlsx"
 
     if req.adjuntar_pdf:
         pdf_bytes = _generar_bytes_eventos_pdf(rows, titulo_rango)
-        id_pdf = _guardar_reporte_compartido(filename_pdf, "pdf", pdf_bytes)
+        archivos_adjuntos_html.append(f"<li>📄 <strong>PDF Oficial:</strong> {filename_pdf}</li>")
 
     if req.adjuntar_excel:
         xlsx_bytes = _generar_bytes_eventos_excel(rows, titulo_rango)
-        id_excel = _guardar_reporte_compartido(filename_xlsx, "xlsx", xlsx_bytes)
+        archivos_adjuntos_html.append(f"<li>📊 <strong>Excel (.xlsx):</strong> {filename_xlsx}</li>")
 
-    backend_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("BACKEND_URL") or str(request.base_url).rstrip('/')
-    if backend_url.endswith('/'):
-        backend_url = backend_url[:-1]
-
-    botones_html = ""
-    if id_pdf:
-        url_pdf = f"{backend_url}/api/reportes/descargar/{id_pdf}"
-        botones_html += f"""
-        <a href="{url_pdf}" style="background-color: #1c355e; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 6px; font-size: 14px;">
-            📄 Descargar Reporte PDF
-        </a>
-        """
-    if id_excel:
-        url_excel = f"{backend_url}/api/reportes/descargar/{id_excel}"
-        botones_html += f"""
-        <a href="{url_excel}" style="background-color: #16a34a; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; margin: 6px; font-size: 14px;">
-            📊 Descargar Reporte Excel
-        </a>
-        """
+    lista_adjuntos_str = "".join(archivos_adjuntos_html) if archivos_adjuntos_html else "<li>Ningún archivo adjunto</li>"
 
     body_html = f"""
     <html>
     <body style="font-family: Arial, sans-serif; color: #333; background-color: #f4f6fb; padding: 20px;">
-        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 24px; border-radius: 12px; border: 1px solid #e0e6ed;">
-            <h2 style="color: #1c355e; margin-top: 0; border-bottom: 2px solid #1c355e; padding-bottom: 12px;">
-                SIPREF — Agenda e Historial de Eventos
-            </h2>
-            <p style="font-size: 15px;">Hola,</p>
+        <div style="max-width: 650px; margin: 0 auto; background: #ffffff; padding: 28px; border-radius: 12px; border: 1px solid #e0e6ed; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+            <div style="border-bottom: 2px solid #1c355e; padding-bottom: 14px; margin-bottom: 18px;">
+                <h2 style="color: #1c355e; margin: 0; font-size: 20px;">
+                    UNIVERSIDAD LATINO — SIPREF
+                </h2>
+                <p style="color: #d97706; font-weight: bold; margin: 4px 0 0 0; font-size: 13px;">
+                    Agenda e Historial de Eventos ({len(rows)} registros)
+                </p>
+            </div>
             <p style="font-size: 14px; color: #475569; line-height: 1.6;">
-                {req.mensaje or 'El reporte solicitado de eventos y reservas de aulas está adjunto y disponible para su descarga.'}
+                {req.mensaje or 'Se adjunta el reporte oficial de eventos y reservas de aulas generado desde SIPREF.'}
             </p>
-            <div style="margin: 24px 0; text-align: center;">
-                {botones_html}
+            <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 18px; margin: 20px 0;">
+                <p style="margin: 0; color: #166534; font-size: 13px; font-weight: bold;">
+                    📎 Archivo(s) adjunto(s) en este correo:
+                </p>
+                <ul style="margin: 6px 0 0 0; padding-left: 20px; color: #15803d; font-size: 12px; line-height: 1.6;">
+                    {lista_adjuntos_str}
+                </ul>
+                <p style="margin: 8px 0 0 0; color: #64748b; font-size: 11px;">
+                    Los archivos solicitados se encuentran directamente adjuntos en este mensaje para su descarga directa.
+                </p>
             </div>
             <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-            <p style="font-size: 12px; color: #64748b; margin-bottom: 0;">
-                Reporte generado por <strong>{req.usuario_nombre}</strong> el {datetime.now().strftime('%d/%m/%Y %H:%M')}. Total de registros: {len(rows)}.
+            <p style="font-size: 11px; color: #94a3b8; margin: 0; line-height: 1.5;">
+                Reporte emitido por <strong>{req.usuario_nombre}</strong> el {datetime.now().strftime('%d/%m/%Y %H:%M')}. Total de registros: {len(rows)}.<br/>
+                Sistema de Control y Gestión Escolar — Universidad Latino.
             </p>
         </div>
     </body>
     </html>
     """
 
-    # Enviar por correo SMTP si está disponible
     sender_email = os.getenv("SMTP_USER", "").strip() or "soporte.sipref.software@gmail.com"
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
-    smtp_pass = (os.getenv("SMTP_PASSWORD", "") or os.getenv("SMTP_PASS", "")).strip()
 
     try:
         from email.mime.base import MIMEBase
         from email import encoders
 
         msg = MIMEMultipart()
-        msg['From'] = f"SIPREF ULA <{sender_email}>"
+        msg['From'] = f'"SIPREF ULA" <{sender_email}>'
         msg['To'] = ", ".join(destinos)
         if cc_list: msg['Cc'] = ", ".join(cc_list)
         msg['Subject'] = req.asunto or "Reporte de Reservas y Eventos — SIPREF"
-        msg.attach(MIMEText(body_html, 'html'))
+        msg.attach(MIMEText(body_html, 'html', 'utf-8'))
 
         if pdf_bytes:
             part = MIMEBase('application', 'pdf')
@@ -9355,15 +9406,11 @@ def api_exportar_eventos_email(req: ExportarEventosEmailRequest, request: Reques
             msg.attach(part)
 
         all_recipients = list(destinos) + list(cc_list) + list(cco_list)
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=10.0) as server:
-            server.starttls()
-            if smtp_pass:
-                server.login(sender_email, smtp_pass)
-            server.sendmail(sender_email, all_recipients, msg.as_string())
+        _enviar_mime_con_adjuntos(msg, sender_email, all_recipients, request=request)
     except Exception as e:
-        print(f"Aviso SMTP al enviar reporte de eventos: {e}")
+        raise HTTPException(status_code=500, detail=f"No se pudo enviar el reporte de eventos con adjuntos: {e}")
 
-    return {"message": "Reporte de eventos generado y enviado exitosamente", "destinatarios": len(destinos)}
+    return {"message": "Reporte de eventos con adjuntos enviado exitosamente", "destinatarios": len(destinos)}
 
 
 @app.get("/api/eventos-hoy")
