@@ -327,26 +327,6 @@ export default function ConfiguracionPerfil() {
                   </select>
                 </div>
               </div>
-
-              {/* Cargo */}
-              <div>
-                <label className="block text-[10px] font-bold text-[#44464e] uppercase tracking-widest mb-2">Cargo / Rol</label>
-                <div className="relative">
-                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[17px]">badge</span>
-                  <input value="Prefecto Universitario" disabled
-                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/30 rounded-xl text-sm font-medium text-[#75777f] bg-[#f4f3f6] cursor-not-allowed" />
-                </div>
-              </div>
-
-              {/* Departamento */}
-              <div>
-                <label className="block text-[10px] font-bold text-[#44464e] uppercase tracking-widest mb-2">Departamento</label>
-                <div className="relative">
-                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[17px]">corporate_fare</span>
-                  <input value="Prefectura Universitaria" disabled
-                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/30 rounded-xl text-sm font-medium text-[#75777f] bg-[#f4f3f6] cursor-not-allowed" />
-                </div>
-              </div>
             </div>
 
             <div className="px-7 py-5 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex flex-col sm:flex-row items-center justify-between gap-4">
