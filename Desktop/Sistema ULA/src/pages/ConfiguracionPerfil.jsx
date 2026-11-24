@@ -53,6 +53,8 @@ export default function ConfiguracionPerfil() {
   const [usuarios, setUsuarios] = useState([]);
   const [usuariosReservas, setUsuariosReservas] = useState([]);
   const [fotosReservasFallidas, setFotosReservasFallidas] = useState({});
+  const [tabDirectorio, setTabDirectorio] = useState('sipref'); // 'sipref' | 'reservas'
+  const [busquedaDirectorio, setBusquedaDirectorio] = useState('');
 
   // Determinamos si es admin buscando su correo en la lista fresca de usuarios o en el contexto
   const correoActual = (usuarios.find(u => u.id === usuario.id)?.correo || usuario?.correo || '')?.trim().toLowerCase();
@@ -222,63 +224,137 @@ export default function ConfiguracionPerfil() {
     return niveles[score - 1] || { nivel: 0, label: '', color: '' };
   }, [pass.nueva]);
 
+  const totalEnLineaSipref = useMemo(
+    () =>
+      usuarios.filter(
+        (u) => Boolean(u.en_linea) || String(u.id) === String(usuario.id) || u.correo === usuario.correo
+      ).length,
+    [usuarios, usuario.id, usuario.correo]
+  );
+
+  const totalEnLineaReservas = useMemo(
+    () => usuariosReservas.filter((u) => esEstadoReservasActivo(u.estado) && Boolean(u.en_linea)).length,
+    [usuariosReservas]
+  );
+
+  const usuariosFiltrados = useMemo(() => {
+    const q = busquedaDirectorio.trim().toLowerCase();
+    if (!q) return usuarios;
+    return usuarios.filter(
+      (u) =>
+        (u.nombre || '').toLowerCase().includes(q) ||
+        (u.correo || '').toLowerCase().includes(q) ||
+        (u.turno || '').toLowerCase().includes(q)
+    );
+  }, [usuarios, busquedaDirectorio]);
+
+  const usuariosReservasFiltrados = useMemo(() => {
+    const q = busquedaDirectorio.trim().toLowerCase();
+    if (!q) return usuariosReservas;
+    return usuariosReservas.filter(
+      (u) =>
+        (u.nombre || '').toLowerCase().includes(q) ||
+        (u.correo || '').toLowerCase().includes(q) ||
+        (u.estado || '').toLowerCase().includes(q)
+    );
+  }, [usuariosReservas, busquedaDirectorio]);
+
   return (
-    <div className="space-y-5 font-manrope max-w-[1300px] mx-auto">
+    <div className="space-y-6 font-manrope max-w-[1320px] mx-auto pb-4">
 
-      {/* ══ CABECERA COMPACTA ══════════════════════════════════════════════════ */}
-      <div className="rounded-2xl overflow-hidden shadow-lg"
-        style={{ background: 'linear-gradient(135deg, #0a1628 0%, #1c355e 55%, #1a3a6b 100%)' }}>
-        <div className="h-0.5" style={{ background: 'linear-gradient(to right, #fdbb11 0%, #ffe066 40%, transparent 100%)' }} />
+      {/* ══ CABECERA HERO EJECUTIVA ════════════════════════════════════════════ */}
+      <div
+        className="rounded-[26px] overflow-hidden shadow-lg relative"
+        style={{ background: 'linear-gradient(135deg, #0b192e 0%, #1c355e 58%, #1d4075 100%)' }}
+      >
+        <div className="h-1" style={{ background: 'linear-gradient(to right, #fdbb11 0%, #ffe066 45%, transparent 100%)' }} />
 
-        <div className="px-7 py-5 flex flex-col sm:flex-row items-center sm:items-start gap-5">
-          {/* Avatar */}
-          <div className="relative flex-shrink-0">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center border border-white/20 shadow-xl"
-              style={{ background: 'linear-gradient(145deg, #243d6b 0%, #1a2f55 100%)' }}>
-              <span className="text-3xl font-black text-white">{inicial}</span>
+        {/* Decoración sutil */}
+        <div className="pointer-events-none absolute -right-16 -top-16 w-64 h-64 rounded-full bg-[#fdbb11]/10 blur-3xl" />
+
+        <div className="relative px-6 sm:px-8 py-6 flex flex-col lg:flex-row items-center justify-between gap-6">
+          {/* Izquierda: Avatar + identidad */}
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 w-full lg:w-auto">
+            <div className="relative flex-shrink-0">
+              <div
+                className="w-[72px] h-[72px] rounded-2xl flex items-center justify-center border border-white/25 shadow-xl"
+                style={{ background: 'linear-gradient(145deg, #274475 0%, #162b4d 100%)' }}
+              >
+                <span className="text-3xl font-black text-white">{inicial}</span>
+              </div>
+              <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-[2.5px] border-[#0b192e] shadow-sm" />
             </div>
-            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-green-400 border-2 border-[#0a1628]" />
+
+            <div className="text-center sm:text-left min-w-0">
+              <p className="text-[10px] font-extrabold uppercase tracking-[0.22em] mb-1" style={{ color: '#fdbb11' }}>
+                Universidad Latino · SIPREF
+              </p>
+              <h1 className="text-2xl font-black text-white leading-tight capitalize truncate">
+                {usuario.nombre_completo || 'Usuario'}
+              </h1>
+              <p className="text-white/65 text-xs font-medium mt-0.5 truncate">{usuario.correo || '—'}</p>
+
+              <div className="flex flex-wrap gap-2 mt-3 justify-center sm:justify-start">
+                {usuario.turno && (
+                  <span
+                    className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-lg"
+                    style={{ background: 'rgba(253,187,17,0.14)', color: '#fde047', border: '1px solid rgba(253,187,17,0.32)' }}
+                  >
+                    <span className="material-symbols-outlined text-[13px]">schedule</span>
+                    {turnoLabel}
+                  </span>
+                )}
+                <span
+                  className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-lg"
+                  style={{ background: 'rgba(52,211,153,0.14)', color: '#86efac', border: '1px solid rgba(52,211,153,0.28)' }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  En línea
+                </span>
+                {esAdmin && (
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-lg"
+                    style={{ background: 'rgba(255,255,255,0.1)', color: '#e2e8f0', border: '1px solid rgba(255,255,255,0.2)' }}
+                  >
+                    <span className="material-symbols-outlined text-[13px] text-[#fdbb11]">verified</span>
+                    Administrador
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* Datos principales */}
-          <div className="flex-1 text-center sm:text-left">
-            <p className="text-[9px] font-bold uppercase tracking-[0.2em] mb-1" style={{ color: '#fdbb11' }}>
-              Universidad Latino · SIPREF
-            </p>
-            <h1 className="text-xl font-black text-white leading-tight capitalize">
-              {usuario.nombre_completo || 'Usuario'}
-            </h1>
-            <p className="text-white/50 text-xs mt-0.5">{usuario.correo || '—'}</p>
-
-            <div className="flex flex-wrap gap-2 mt-3 justify-center sm:justify-start">
-
-              {usuario.turno && (
-                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg"
-                  style={{ background: 'rgba(253,187,17,0.12)', color: '#fdbb11', border: '1px solid rgba(253,187,17,0.3)' }}>
-                  <span className="material-symbols-outlined text-[11px]">schedule</span>
-                  {turnoLabel}
-                </span>
-              )}
-              <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg"
-                style={{ background: 'rgba(74,222,128,0.12)', color: '#86efac', border: '1px solid rgba(74,222,128,0.25)' }}>
-                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                En línea
-              </span>
+          {/* Derecha: KPIs rápidos */}
+          <div className="grid grid-cols-3 gap-2.5 sm:gap-3 w-full lg:w-auto shrink-0">
+            <div className="rounded-2xl px-4 py-3 bg-white/[0.07] border border-white/10 backdrop-blur-xs text-center min-w-[96px]">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">SIPREF</p>
+              <p className="text-xl font-black text-white mt-0.5">{usuarios.length}</p>
+              <p className="text-[10px] text-white/50 font-medium">cuentas</p>
+            </div>
+            <div className="rounded-2xl px-4 py-3 bg-white/[0.07] border border-white/10 backdrop-blur-xs text-center min-w-[96px]">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/60">Reservas</p>
+              <p className="text-xl font-black text-[#fdbb11] mt-0.5">{usuariosReservas.length}</p>
+              <p className="text-[10px] text-white/50 font-medium">usuarios</p>
+            </div>
+            <div className="rounded-2xl px-4 py-3 bg-emerald-400/10 border border-emerald-300/20 backdrop-blur-xs text-center min-w-[96px]">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-200">Activos</p>
+              <p className="text-xl font-black text-emerald-300 mt-0.5">{totalEnLineaSipref + totalEnLineaReservas}</p>
+              <p className="text-[10px] text-emerald-200/70 font-medium">en línea</p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ══ LAYOUT DE DOS COLUMNAS ═════════════════════════════════════════════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-5 items-start">
+      {/* ══ LAYOUT DE DOS COLUMNAS EQUILIBRADAS ════════════════════════════════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-6 items-start">
 
-        {/* ── COLUMNA IZQUIERDA ──────────────────────────────────────────────── */}
+        {/* ── COLUMNA IZQUIERDA: PERFIL + ACTIVIDAD + SEGURIDAD ──────────────── */}
         <div className="space-y-5">
 
           {/* ── EDITAR PERFIL ────────────────────────────────────────────────── */}
           <form onSubmit={handleGuardar} className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-            <div className="px-7 py-5 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center gap-4">
-              <div className="w-10 h-10 rounded-[14px] bg-[#1c355e] flex items-center justify-center shadow-inner">
+            <div className="px-6 sm:px-7 py-5 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center gap-4">
+              <div className="w-10 h-10 rounded-[14px] bg-[#1c355e] flex items-center justify-center shadow-inner shrink-0">
                 <span className="material-symbols-outlined text-white text-[20px]">manage_accounts</span>
               </div>
               <div>
@@ -287,16 +363,19 @@ export default function ConfiguracionPerfil() {
               </div>
             </div>
 
-            <div className="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="px-6 sm:px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Nombre */}
               <div className="sm:col-span-2">
                 <label className="block text-[10px] font-bold text-[#44464e] uppercase tracking-widest mb-2">Nombre Completo</label>
                 <div className="relative group">
-                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[17px] transition-colors group-focus-within:text-[#1c355e]">person</span>
-                  <input type="text" value={usuario.nombre_completo}
+                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[18px] transition-colors group-focus-within:text-[#1c355e]">person</span>
+                  <input
+                    type="text"
+                    value={usuario.nombre_completo}
                     onChange={e => setUsuario({ ...usuario, nombre_completo: e.target.value })}
                     placeholder="Tu nombre completo"
-                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/60 rounded-xl text-sm font-medium text-[#1b1c1e] placeholder:text-[#c5c6cf] bg-white focus:outline-none focus:ring-2 focus:ring-[#1c355e]/15 focus:border-[#1c355e] transition-all" />
+                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/60 rounded-xl text-sm font-semibold text-[#1b1c1e] placeholder:text-[#c5c6cf] bg-white focus:outline-none focus:ring-2 focus:ring-[#1c355e]/15 focus:border-[#1c355e] transition-all"
+                  />
                 </div>
               </div>
 
@@ -304,12 +383,17 @@ export default function ConfiguracionPerfil() {
               <div>
                 <label className="block text-[10px] font-bold text-[#44464e] uppercase tracking-widest mb-2">Correo Institucional</label>
                 <div className="relative">
-                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[17px]">mail</span>
-                  <input type="email" value={usuario.correo} disabled
-                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/30 rounded-xl text-sm font-medium text-[#75777f] bg-[#f4f3f6] cursor-not-allowed" />
+                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[18px]">mail</span>
+                  <input
+                    type="email"
+                    value={usuario.correo}
+                    disabled
+                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/30 rounded-xl text-sm font-medium text-[#75777f] bg-[#f4f3f6] cursor-not-allowed"
+                  />
                 </div>
-                <p className="text-[10px] text-[#75777f] mt-1 flex items-center gap-1">
-                  <span className="material-symbols-outlined text-[11px]">lock</span>No se puede modificar.
+                <p className="text-[10px] text-[#75777f] mt-1.5 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[12px]">lock</span>
+                  Correo institucional fijo
                 </p>
               </div>
 
@@ -317,143 +401,286 @@ export default function ConfiguracionPerfil() {
               <div>
                 <label className="block text-[10px] font-bold text-[#44464e] uppercase tracking-widest mb-2">Turno Asignado</label>
                 <div className="relative group">
-                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[17px] transition-colors group-focus-within:text-[#1c355e]">schedule</span>
-                  <select value={usuario.turno} onChange={e => setUsuario({ ...usuario, turno: e.target.value })}
-                    className="w-full pl-10 pr-4 py-3 border border-[#c5c6cf]/60 rounded-xl text-sm font-medium text-[#1b1c1e] bg-white appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1c355e]/15 focus:border-[#1c355e] transition-all">
+                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[#c5c6cf] text-[18px] transition-colors group-focus-within:text-[#1c355e]">schedule</span>
+                  <select
+                    value={usuario.turno}
+                    onChange={e => setUsuario({ ...usuario, turno: e.target.value })}
+                    className="w-full pl-10 pr-9 py-3 border border-[#c5c6cf]/60 rounded-xl text-sm font-semibold text-[#1b1c1e] bg-white appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1c355e]/15 focus:border-[#1c355e] transition-all"
+                  >
                     <option value="">Seleccionar turno...</option>
                     <option value="matutino">Turno Matutino</option>
                     <option value="vespertino">Turno Vespertino</option>
                     <option value="ambos">Ambos Turnos</option>
                   </select>
+                  <span className="material-symbols-outlined pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#75777f] text-[18px]">expand_more</span>
                 </div>
               </div>
             </div>
 
-            <div className="px-7 py-5 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="px-6 sm:px-7 py-4 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex flex-col sm:flex-row items-center justify-between gap-3">
               <p className="text-xs text-[#75777f] font-medium flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-green-500 text-[16px]">verified_user</span>
+                <span className="material-symbols-outlined text-emerald-500 text-[16px]">verified_user</span>
                 Datos cifrados y almacenados de forma segura.
               </p>
-              <button type="submit" disabled={guardando}
-                className={`w-full sm:w-auto flex items-center justify-center gap-2 px-7 py-3 rounded-[14px] text-sm font-bold transition-all ${guardando ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-[#1c355e] hover:bg-[#0e1f3d] text-white shadow-lg shadow-[#1c355e]/20 hover:-translate-y-0.5'
-                  }`}>
+              <button
+                type="submit"
+                disabled={guardando}
+                className={`w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+                  guardando
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-[#1c355e] hover:bg-[#0e1f3d] text-white shadow-md shadow-[#1c355e]/20 hover:-translate-y-0.5'
+                }`}
+              >
                 <span className="material-symbols-outlined text-[18px]">{guardando ? 'hourglass_empty' : 'save'}</span>
                 {guardando ? 'Guardando...' : 'Guardar Cambios'}
               </button>
             </div>
           </form>
 
-          {/* ── CAMBIO DE CONTRASEÑA ─────────────────────────────────────────── */}
+          {/* ── ACTIVIDAD RECIENTE (EN 3 TARJETAS HORIZONTALES) ──────────────── */}
           <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-            <div className="px-7 py-5 bg-gradient-to-r from-[#faf9fc] to-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-[14px] bg-[#1c355e]/10 border border-[#1c355e]/20 flex items-center justify-center">
-                  <span className="material-symbols-outlined text-[#1c355e] text-[20px]">lock_reset</span>
-                </div>
-                <div>
-                  <h2 className="text-base font-black text-[#1b1c1e] tracking-tight">Seguridad · Contraseña</h2>
-                  <p className="text-xs text-[#75777f] font-medium mt-0.5">Actualiza tu credencial de acceso al sistema</p>
-                </div>
+            <div className="px-6 sm:px-7 py-4 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center gap-3.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-50 border border-emerald-200/70 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-emerald-600 text-[19px]">history</span>
               </div>
-              <button onClick={() => setMostrarModalPass(true)} type="button"
-                className="flex items-center gap-2 px-5 py-2.5 rounded-[12px] text-sm font-bold bg-white border border-[#c5c6cf] text-[#1c355e] hover:bg-[#1c355e] hover:text-white shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5">
-                <span className="material-symbols-outlined text-[18px]">key</span>
-                Cambiar Contraseña
-              </button>
+              <div>
+                <h2 className="text-sm font-black text-[#1b1c1e] tracking-tight">Actividad Reciente</h2>
+                <p className="text-[11px] text-[#75777f] font-medium">Resumen de accesos y cambios en tu cuenta</p>
+              </div>
+            </div>
+
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {[
+                {
+                  icon: 'login',
+                  iconBg: 'text-[#1c355e] bg-[#1c355e]/10 border-[#1c355e]/15',
+                  label: 'Último acceso',
+                  valor: fmtFechaHora(usuario.logged_at),
+                },
+                {
+                  icon: 'edit_note',
+                  iconBg: 'text-amber-600 bg-amber-50 border-amber-200',
+                  label: 'Último cambio',
+                  valor: fmtFechaHora(ultimaActualizacion),
+                },
+                {
+                  icon: 'person_add',
+                  iconBg: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+                  label: 'Miembro desde',
+                  valor: fmtFecha(usuario.created_at),
+                },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  className="rounded-2xl border border-[#e5e7eb] bg-[#faf9fc]/70 p-3.5 flex flex-col gap-2"
+                >
+                  <div className={`w-8 h-8 rounded-xl border flex items-center justify-center ${item.iconBg}`}>
+                    <span className="material-symbols-outlined text-[17px]">{item.icon}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-[#75777f] uppercase tracking-wider">{item.label}</p>
+                    <p className="text-xs font-extrabold text-[#1b1c1e] mt-0.5 leading-snug break-words">{item.valor}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* ── ZONA DE PELIGRO ──────────────────────────────────────────────── */}
-          <div className="bg-white border border-red-200/60 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-            <div className="px-7 py-5 bg-gradient-to-r from-[#fff1f1] to-[#fff5f5] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          {/* ── SEGURIDAD Y GESTIÓN DE CUENTA ────────────────────────────────── */}
+          <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden divide-y divide-[#c5c6cf]/25">
+            {/* Cambio de contraseña */}
+            <div className="px-6 sm:px-7 py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <div className="w-10 h-10 rounded-[14px] bg-red-100 border border-red-200 flex items-center justify-center flex-shrink-0 shadow-inner">
+                <div className="w-10 h-10 rounded-[14px] bg-[#1c355e]/10 border border-[#1c355e]/20 flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined text-[#1c355e] text-[20px]">lock_reset</span>
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-[#1b1c1e] tracking-tight">Seguridad · Contraseña</h2>
+                  <p className="text-xs text-[#75777f] font-medium mt-0.5">Actualiza tu credencial de acceso al sistema</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setMostrarModalPass(true)}
+                type="button"
+                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-white border border-[#c5c6cf] text-[#1c355e] hover:bg-[#1c355e] hover:text-white shadow-xs transition-all cursor-pointer shrink-0"
+              >
+                <span className="material-symbols-outlined text-[17px]">key</span>
+                Cambiar Contraseña
+              </button>
+            </div>
+
+            {/* Zona de peligro */}
+            <div className="px-6 sm:px-7 py-5 bg-gradient-to-r from-[#fff5f5] to-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-[14px] bg-red-100 border border-red-200 flex items-center justify-center shrink-0">
                   <span className="material-symbols-outlined text-red-600 text-[20px]">warning</span>
                 </div>
                 <div>
-                  <h2 className="text-base font-black text-red-700 tracking-tight">Zona de Peligro</h2>
-                  <p className="text-xs text-red-500 font-medium mt-0.5">Eliminar cuenta permanentemente</p>
+                  <h2 className="text-sm font-black text-red-700 tracking-tight">Zona de Peligro</h2>
+                  <p className="text-xs text-red-500 font-medium mt-0.5">Eliminar tu cuenta permanentemente del sistema</p>
                 </div>
               </div>
-              <button onClick={() => setMostrarConfirmacion(true)}
-                className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-[12px] bg-white border border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 text-sm font-bold transition-all hover:shadow-sm hover:-translate-y-0.5">
-                <span className="material-symbols-outlined text-[18px]">delete_forever</span>
+              <button
+                type="button"
+                onClick={() => setMostrarConfirmacion(true)}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-red-200 text-red-600 hover:bg-red-600 hover:text-white hover:border-red-600 text-xs font-bold transition-all cursor-pointer shrink-0"
+              >
+                <span className="material-symbols-outlined text-[17px]">delete_forever</span>
                 Eliminar Cuenta
               </button>
             </div>
           </div>
         </div>
 
-        {/* ── COLUMNA DERECHA ────────────────────────────────────────────────── */}
-        <div className="space-y-4">
-
-          {/* ── PANEL USUARIOS REGISTRADOS ───────────────────────────────────── */}
-          <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col">
-            <div className="px-6 py-5 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center justify-between">
+        {/* ── COLUMNA DERECHA: DIRECTORIO UNIFICADO CON PESTAÑAS ─────────────── */}
+        <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col">
+          {/* Header */}
+          <div className="px-6 pt-5 pb-4 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white space-y-4">
+            <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-[14px] bg-[#1c355e] flex items-center justify-center shadow-inner">
-                  <span className="material-symbols-outlined text-white text-[20px]">group</span>
+                <div className="w-10 h-10 rounded-[14px] bg-[#1c355e] flex items-center justify-center shadow-inner shrink-0">
+                  <span className="material-symbols-outlined text-white text-[20px]">
+                    {tabDirectorio === 'sipref' ? 'group' : 'event_available'}
+                  </span>
                 </div>
                 <div>
-                  <h2 className="text-base font-black text-[#1b1c1e] tracking-tight">Usuarios Registrados</h2>
-                  <p className="text-xs text-[#75777f] font-medium mt-0.5">Personal con acceso al sistema</p>
+                  <h2 className="text-base font-black text-[#1b1c1e] tracking-tight">Directorio de Usuarios</h2>
+                  <p className="text-xs text-[#75777f] font-medium mt-0.5">
+                    {tabDirectorio === 'sipref'
+                      ? 'Personal registrado en SIPREF'
+                      : 'Usuarios en el módulo SIPREF Reservas'}
+                  </p>
                 </div>
               </div>
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-[#1c355e]/8 text-[#1c355e] border border-[#1c355e]/15">
-                {usuarios.length}
+              <span className="px-2.5 py-1 rounded-full text-[11px] font-black bg-[#1c355e]/8 text-[#1c355e] border border-[#1c355e]/15 shrink-0">
+                {tabDirectorio === 'sipref' ? usuarios.length : usuariosReservas.length}
               </span>
             </div>
 
-            {/* Lista de usuarios (max 8 visibles + scroll) */}
-            <div className="overflow-y-auto divide-y divide-[#f0f0f4]" style={{ maxHeight: '360px' }}>
-              {usuarios.length === 0 ? (
-                <div className="py-10 text-center">
-                  <span className="material-symbols-outlined text-3xl text-[#c5c6cf] block mb-2">group</span>
-                  <p className="text-xs font-semibold text-[#75777f]">Sin usuarios registrados</p>
+            {/* Selector de pestañas */}
+            <div className="grid grid-cols-2 gap-1.5 bg-[#f1f3f8] p-1 rounded-2xl border border-[#c5c6cf]/30">
+              <button
+                type="button"
+                onClick={() => setTabDirectorio('sipref')}
+                className={`py-2 px-3 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  tabDirectorio === 'sipref'
+                    ? 'bg-[#1c355e] text-white shadow-sm'
+                    : 'text-[#44464e] hover:text-[#1c355e]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">group</span>
+                SIPREF ({usuarios.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setTabDirectorio('reservas')}
+                className={`py-2 px-3 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  tabDirectorio === 'reservas'
+                    ? 'bg-[#1c355e] text-white shadow-sm'
+                    : 'text-[#44464e] hover:text-[#1c355e]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">event_available</span>
+                Reservas ({usuariosReservas.length})
+              </button>
+            </div>
+
+            {/* Buscador rápido */}
+            <div className="relative">
+              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[17px]">search</span>
+              <input
+                type="text"
+                value={busquedaDirectorio}
+                onChange={(e) => setBusquedaDirectorio(e.target.value)}
+                placeholder="Buscar por nombre o correo..."
+                className="w-full pl-9 pr-8 py-2 bg-white border border-[#c5c6cf]/50 rounded-xl text-xs font-semibold text-[#1b1c1e] placeholder:text-slate-400 outline-none focus:border-[#1c355e] focus:ring-2 focus:ring-[#1c355e]/15 transition-all"
+              />
+              {busquedaDirectorio && (
+                <button
+                  type="button"
+                  onClick={() => setBusquedaDirectorio('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  title="Limpiar búsqueda"
+                >
+                  <span className="material-symbols-outlined text-[16px]">close</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Lista scrolleable */}
+          <div className="overflow-y-auto divide-y divide-[#f0f0f4]" style={{ maxHeight: '490px' }}>
+            {tabDirectorio === 'sipref' ? (
+              usuariosFiltrados.length === 0 ? (
+                <div className="py-14 text-center">
+                  <span className="material-symbols-outlined text-4xl text-[#c5c6cf] block mb-2">group</span>
+                  <p className="text-xs font-semibold text-[#75777f]">
+                    {busquedaDirectorio ? 'No se encontraron coincidencias' : 'Sin usuarios registrados'}
+                  </p>
                 </div>
               ) : (
-                usuarios.map(u => {
+                usuariosFiltrados.map((u) => {
                   const esMismo = String(u.id) === String(usuario.id) || u.correo === usuario.correo;
                   const estaConectado = Boolean(u.en_linea) || esMismo;
                   const turnoU = TURNO_LABEL[u.turno?.toLowerCase()] || u.turno || '—';
                   return (
-                    <div key={u.id}
-                      className={`px-5 py-3 flex items-center gap-3 transition-colors hover:bg-[#faf9fc] ${esMismo ? 'bg-[#1c355e]/3' : ''}`}>
-                      {/* Avatar */}
+                    <div
+                      key={u.id}
+                      className={`px-5 py-3.5 flex items-center gap-3 transition-colors hover:bg-[#faf9fc] ${
+                        esMismo ? 'bg-[#1c355e]/[0.03]' : ''
+                      }`}
+                    >
                       <div className="relative flex-shrink-0">
-                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black text-sm ${esMismo ? 'bg-[#1c355e] text-white' : 'bg-[#f4f3f6] text-[#44464e]'
-                          }`}>
+                        <div
+                          className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm ${
+                            esMismo ? 'bg-[#1c355e] text-white shadow-xs' : 'bg-[#f1f3f8] text-[#1c355e]'
+                          }`}
+                        >
                           {(u.nombre || 'U').charAt(0).toUpperCase()}
                         </div>
-                        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${estaConectado ? 'bg-green-400' : 'bg-[#c5c6cf]'}`} />
+                        <span
+                          className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${
+                            estaConectado ? 'bg-emerald-400' : 'bg-[#c5c6cf]'
+                          }`}
+                        />
                       </div>
 
-                      {/* Info */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <p className="text-xs font-bold text-[#1b1c1e] truncate capitalize">{u.nombre}</p>
+                          <p className="text-xs font-extrabold text-[#1b1c1e] truncate capitalize">{u.nombre}</p>
                           {esMismo && (
-                            <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-[#1c355e]/10 text-[#1c355e] flex-shrink-0">Tú</span>
+                            <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-[#1c355e]/10 text-[#1c355e] flex-shrink-0">
+                              Tú
+                            </span>
                           )}
                         </div>
-                        <p className="text-[10px] text-[#75777f] truncate">{u.correo}</p>
+                        <p className="text-[11px] text-[#75777f] truncate">{u.correo}</p>
                       </div>
 
-                      {/* Estado / Acciones */}
-                      <div className="flex-shrink-0 flex items-center gap-3">
+                      <div className="flex-shrink-0 flex items-center gap-2">
                         <div className="text-right space-y-1">
-                          <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-2 py-0.5 rounded-full ${estaConectado ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-[#f4f3f6] text-[#75777f] border border-[#c5c6cf]/30'
-                            }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${estaConectado ? 'bg-green-400 animate-pulse' : 'bg-[#c5c6cf]'}`} />
+                          <span
+                            className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                              estaConectado
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-[#f4f3f6] text-[#75777f] border border-[#c5c6cf]/30'
+                            }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                estaConectado ? 'bg-emerald-400 animate-pulse' : 'bg-[#c5c6cf]'
+                              }`}
+                            />
                             {estaConectado ? 'En línea' : 'Desconectado'}
                           </span>
-                          {u.turno && <p className="text-[9px] text-[#75777f] font-medium">{turnoU}</p>}
+                          {u.turno && <p className="text-[10px] text-[#75777f] font-semibold">{turnoU}</p>}
                         </div>
                         {esAdmin && !esMismo && (
                           <button
+                            type="button"
                             onClick={() => setUsuarioAEliminar(u)}
                             title="Eliminar usuario del sistema"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-red-400 hover:text-white hover:bg-red-500 transition-colors border border-transparent hover:border-red-600"
+                            className="w-8 h-8 rounded-xl flex items-center justify-center text-red-400 hover:text-white hover:bg-red-500 transition-colors cursor-pointer"
                           >
                             <span className="material-symbols-outlined text-[16px]">delete</span>
                           </button>
@@ -462,177 +689,110 @@ export default function ConfiguracionPerfil() {
                     </div>
                   );
                 })
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-4 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex items-center justify-between">
-              <p className="text-xs text-[#75777f] font-bold">
-                {usuarios.length} usuario{usuarios.length !== 1 ? 's' : ''} registrado{usuarios.length !== 1 ? 's' : ''}
-              </p>
-              {(() => {
-                const totalEnLinea = usuarios.filter(u => Boolean(u.en_linea) || (String(u.id) === String(usuario.id) || u.correo === usuario.correo)).length;
-                return (
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-lg">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                    {totalEnLinea} en línea
-                  </span>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* ── PANEL USUARIOS DE SIPREF RESERVAS ────────────────────────────── */}
-          <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden flex flex-col">
-            <div className="px-6 py-5 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-[14px] bg-[#1c355e]/10 border border-[#1c355e]/20 flex items-center justify-center">
-                  <span className="material-symbols-outlined text-[#1c355e] text-[20px]">event_available</span>
-                </div>
-                <div>
-                  <h2 className="text-base font-black text-[#1b1c1e] tracking-tight">Usuarios · SIPREF Reservas</h2>
-                  <p className="text-xs text-[#75777f] font-medium mt-0.5">Registrados en el módulo de reservas</p>
-                </div>
+              )
+            ) : usuariosReservasFiltrados.length === 0 ? (
+              <div className="py-14 text-center">
+                <span className="material-symbols-outlined text-4xl text-[#c5c6cf] block mb-2">event_available</span>
+                <p className="text-xs font-semibold text-[#75777f]">
+                  {busquedaDirectorio
+                    ? 'No se encontraron coincidencias'
+                    : 'Sin usuarios registrados en SIPREF Reservas'}
+                </p>
               </div>
-              <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-[#1c355e]/8 text-[#1c355e] border border-[#1c355e]/15">
-                {usuariosReservas.length}
-              </span>
-            </div>
+            ) : (
+              usuariosReservasFiltrados.map((ur) => {
+                const estadoUpper = String(ur.estado || 'PENDIENTE').toUpperCase();
+                const esActivo = esEstadoReservasActivo(estadoUpper);
+                const esPendiente = ESTADOS_RESERVAS_PENDIENTES.has(estadoUpper);
+                const estaConectado = esActivo && Boolean(ur.en_linea);
+                const mostrarFoto = ur.foto_url && !fotosReservasFallidas[ur.id];
+                const inicialUr = (ur.nombre || ur.correo || 'U').trim().charAt(0).toUpperCase();
+                const badgeClase = esActivo
+                  ? estaConectado
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-[#f4f3f6] text-[#75777f] border border-[#c5c6cf]/30'
+                  : esPendiente
+                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                  : 'bg-red-50 text-red-600 border border-red-200';
+                const dotClase = esActivo
+                  ? estaConectado
+                    ? 'bg-emerald-400'
+                    : 'bg-[#c5c6cf]'
+                  : esPendiente
+                  ? 'bg-amber-500'
+                  : 'bg-red-500';
+                const etiquetaEstado = esActivo
+                  ? estaConectado
+                    ? 'En línea'
+                    : 'Desconectado'
+                  : esPendiente
+                  ? 'Pendiente'
+                  : estadoUpper === 'RECHAZADA' || estadoUpper === 'RECHAZADO'
+                  ? 'Rechazado'
+                  : 'Suspendido';
 
-            <div className="overflow-y-auto divide-y divide-[#f0f0f4]" style={{ maxHeight: '320px' }}>
-              {usuariosReservas.length === 0 ? (
-                <div className="py-10 text-center">
-                  <span className="material-symbols-outlined text-3xl text-[#c5c6cf] block mb-2">event_available</span>
-                  <p className="text-xs font-semibold text-[#75777f]">Sin usuarios registrados en SIPREF Reservas</p>
-                </div>
-              ) : (
-                usuariosReservas.map((ur) => {
-                  const estadoUpper = String(ur.estado || 'PENDIENTE').toUpperCase();
-                  const esActivo = esEstadoReservasActivo(estadoUpper);
-                  const esPendiente = ESTADOS_RESERVAS_PENDIENTES.has(estadoUpper);
-                  const estaConectado = esActivo && Boolean(ur.en_linea);
-                  const mostrarFoto = ur.foto_url && !fotosReservasFallidas[ur.id];
-                  const inicial = (ur.nombre || ur.correo || 'U').trim().charAt(0).toUpperCase();
-                  const badgeClase = esActivo
-                    ? estaConectado
-                      ? 'bg-green-50 text-green-700 border border-green-200'
-                      : 'bg-[#f4f3f6] text-[#75777f] border border-[#c5c6cf]/30'
-                    : esPendiente
-                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                    : 'bg-red-50 text-red-600 border border-red-200';
-                  const dotClase = esActivo
-                    ? estaConectado
-                      ? 'bg-green-400'
-                      : 'bg-[#c5c6cf]'
-                    : esPendiente
-                    ? 'bg-amber-500'
-                    : 'bg-red-500';
-                  const etiquetaEstado = esActivo
-                    ? estaConectado
-                      ? 'En línea'
-                      : 'Desconectado'
-                    : esPendiente
-                    ? 'Pendiente'
-                    : estadoUpper === 'RECHAZADA' || estadoUpper === 'RECHAZADO'
-                    ? 'Rechazado'
-                    : 'Suspendido';
-
-                  return (
-                    <div key={ur.id} className="px-5 py-3 flex items-center gap-3 transition-colors hover:bg-[#faf9fc]">
-                      <div className="relative flex-shrink-0">
-                        {mostrarFoto ? (
-                          <img
-                            src={ur.foto_url}
-                            alt={ur.nombre || 'Usuario'}
-                            referrerPolicy="no-referrer"
-                            onError={() => setFotosReservasFallidas((prev) => ({ ...prev, [ur.id]: true }))}
-                            className="w-9 h-9 rounded-xl object-cover border border-[#c5c6cf]/40"
-                          />
-                        ) : (
-                          <div className="w-9 h-9 rounded-xl bg-[#f4f3f6] text-[#44464e] flex items-center justify-center font-black text-sm">
-                            {inicial}
-                          </div>
-                        )}
-                        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${dotClase}`} />
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-[#1b1c1e] truncate">{ur.nombre || 'Usuario'}</p>
-                        <p className="text-[10px] text-[#75777f] truncate">{ur.correo}</p>
-                      </div>
-
-                      <div className="flex-shrink-0 flex items-center gap-3">
-                        <div className="text-right space-y-1">
-                          <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${badgeClase}`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${dotClase} ${estaConectado ? 'animate-pulse' : ''}`} />
-                            {etiquetaEstado}
-                          </span>
-                          <p className="text-[9px] text-[#75777f] font-medium">
-                            {ur.ultimo_acceso_en ? fmtFechaHora(ur.ultimo_acceso_en) : fmtFecha(ur.creado_en)}
-                          </p>
+                return (
+                  <div key={ur.id} className="px-5 py-3.5 flex items-center gap-3 transition-colors hover:bg-[#faf9fc]">
+                    <div className="relative flex-shrink-0">
+                      {mostrarFoto ? (
+                        <img
+                          src={ur.foto_url}
+                          alt={ur.nombre || 'Usuario'}
+                          referrerPolicy="no-referrer"
+                          onError={() => setFotosReservasFallidas((prev) => ({ ...prev, [ur.id]: true }))}
+                          className="w-10 h-10 rounded-xl object-cover border border-[#c5c6cf]/40"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-xl bg-[#f1f3f8] text-[#1c355e] flex items-center justify-center font-black text-sm">
+                          {inicialUr}
                         </div>
-                        {esAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => setUsuarioAEliminar({ ...ur, esReservas: true })}
-                            title="Eliminar usuario de SIPREF Reservas"
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-red-400 hover:text-white hover:bg-red-500 transition-colors border border-transparent hover:border-red-600"
-                          >
-                            <span className="material-symbols-outlined text-[16px]">delete</span>
-                          </button>
-                        )}
-                      </div>
+                      )}
+                      <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${dotClase}`} />
                     </div>
-                  );
-                })
-              )}
-            </div>
 
-            <div className="px-6 py-4 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex items-center justify-between">
-              <p className="text-xs text-[#75777f] font-bold">
-                {usuariosReservas.length} usuario{usuariosReservas.length !== 1 ? 's' : ''} en Reservas
-              </p>
-              {(() => {
-                const totalEnLineaReservas = usuariosReservas.filter((u) => esEstadoReservasActivo(u.estado) && Boolean(u.en_linea)).length;
-                return (
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-green-600 bg-green-50 px-2.5 py-1 rounded-lg">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                    {totalEnLineaReservas} en línea
-                  </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-extrabold text-[#1b1c1e] truncate">{ur.nombre || 'Usuario'}</p>
+                      <p className="text-[11px] text-[#75777f] truncate">{ur.correo}</p>
+                    </div>
+
+                    <div className="flex-shrink-0 flex items-center gap-2">
+                      <div className="text-right space-y-1">
+                        <span className={`inline-flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full ${badgeClase}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${dotClase} ${estaConectado ? 'animate-pulse' : ''}`} />
+                          {etiquetaEstado}
+                        </span>
+                        <p className="text-[10px] text-[#75777f] font-medium">
+                          {ur.ultimo_acceso_en ? fmtFechaHora(ur.ultimo_acceso_en) : fmtFecha(ur.creado_en)}
+                        </p>
+                      </div>
+                      {esAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setUsuarioAEliminar({ ...ur, esReservas: true })}
+                          title="Eliminar usuario de SIPREF Reservas"
+                          className="w-8 h-8 rounded-xl flex items-center justify-center text-red-400 hover:text-white hover:bg-red-500 transition-colors cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">delete</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 );
-              })()}
-            </div>
+              })
+            )}
           </div>
 
-          {/* ── ACTIVIDAD RECIENTE ───────────────────────────────────────────── */}
-          <div className="bg-white border border-[#c5c6cf]/40 rounded-[24px] shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-            <div className="px-6 py-5 border-b border-[#c5c6cf]/30 bg-gradient-to-r from-[#faf9fc] to-white flex items-center gap-3">
-              <div className="w-10 h-10 rounded-[14px] bg-[#1c9c72]/10 border border-[#1c9c72]/20 flex items-center justify-center">
-                <span className="material-symbols-outlined text-[#1c9c72] text-[20px]">history</span>
-              </div>
-              <div>
-                <h2 className="text-base font-black text-[#1b1c1e] tracking-tight">Actividad Reciente</h2>
-                <p className="text-xs text-[#75777f] font-medium mt-0.5">Registro de accesos y cambios</p>
-              </div>
-            </div>
-
-            <div className="px-6 py-5 space-y-4">
-              {[
-                { icon: 'login', color: 'text-[#1c355e] bg-[#1c355e]/8 border border-[#1c355e]/10', label: 'Último inicio de sesión', valor: fmtFechaHora(usuario.logged_at) },
-                { icon: 'edit', color: 'text-amber-600 bg-amber-50 border border-amber-200', label: 'Última actualización de perfil', valor: fmtFechaHora(ultimaActualizacion) },
-                { icon: 'person_add', color: 'text-[#1c9c72] bg-[#1c9c72]/8 border border-[#1c9c72]/10', label: 'Fecha de registro', valor: fmtFecha(usuario.created_at) },
-              ].map(item => (
-                <div key={item.label} className="flex items-center gap-4 py-2 border-b border-[#f0f0f4] last:border-none">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${item.color}`}>
-                    <span className="material-symbols-outlined text-[18px]">{item.icon}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[10px] font-bold text-[#75777f] uppercase tracking-wider">{item.label}</p>
-                    <p className="text-sm font-black text-[#1b1c1e] truncate mt-0.5">{item.valor}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
+          {/* Footer del directorio */}
+          <div className="px-6 py-4 border-t border-[#c5c6cf]/30 bg-[#faf9fc] flex items-center justify-between">
+            <p className="text-xs text-[#75777f] font-bold">
+              {tabDirectorio === 'sipref'
+                ? `${usuarios.length} usuario${usuarios.length !== 1 ? 's' : ''} en SIPREF`
+                : `${usuariosReservas.length} usuario${usuariosReservas.length !== 1 ? 's' : ''} en Reservas`}
+            </p>
+            <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/70 px-2.5 py-1 rounded-lg">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              {tabDirectorio === 'sipref' ? totalEnLineaSipref : totalEnLineaReservas} en línea
+            </span>
           </div>
         </div>
       </div>
