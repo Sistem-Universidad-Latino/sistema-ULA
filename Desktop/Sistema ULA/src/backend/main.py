@@ -9481,25 +9481,69 @@ def api_eventos_notificaciones_activas():
                     eventos_hoy.append(r_res)
             eventos_hoy.sort(key=lambda x: x.get("hora_inicio") or "")
 
-            # Recordatorios procesados recientemente (últimas 24 horas)
+            # Recordatorios procesados recientemente (últimas 24 horas) — SIPREF + SIPREF Reservas
             cursor.execute("""
                 SELECT r.*, e.nombre_evento, e.aula_nombre, e.responsable, e.hora_inicio, e.hora_fin
                 FROM eventos_recordatorios r
                 JOIN eventos_aulas e ON r.evento_id = e.id
-                WHERE r.fecha_programada >= DATE_SUB(NOW(), INTERVAL 1 DAY)
-                ORDER BY r.fecha_programada DESC
+                WHERE r.estado = 'enviado'
+                  AND r.fecha_programada >= DATE_SUB(NOW(), INTERVAL 1 DAY)
+                ORDER BY COALESCE(r.fecha_envio, r.fecha_programada) DESC
                 LIMIT 15
             """)
-            recordatorios = cursor.fetchall()
+            recordatorios = list(cursor.fetchall() or [])
             for rec in recordatorios:
+                rec["id"] = f"ev-{rec['id']}"
+                rec["origen"] = "SIPREF"
                 rec["fecha_programada"] = str(rec["fecha_programada"]) if rec.get("fecha_programada") else None
                 rec["fecha_envio"] = str(rec["fecha_envio"]) if rec.get("fecha_envio") else None
                 rec["hora_inicio"] = _formatear_hora_hhmm(rec["hora_inicio"]) if rec.get("hora_inicio") else None
                 rec["hora_fin"] = _formatear_hora_hhmm(rec["hora_fin"]) if rec.get("hora_fin") else None
 
+            try:
+                cursor.execute("""
+                    SELECT r.id, r.reservacion_id, r.canal, r.anticipacion, r.unidad,
+                           r.enviar_en, r.enviado_en,
+                           rr.nombre_evento, rr.espacio_nombre, rr.espacio_id,
+                           rr.responsable, rr.inicio, rr.fin
+                    FROM reservas_recordatorios r
+                    JOIN reservas_reservaciones rr ON r.reservacion_id = rr.id
+                    WHERE r.enviado_en IS NOT NULL
+                      AND r.enviado_en > '2000-01-01 00:00:00'
+                      AND r.enviado_en >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 DAY)
+                      AND rr.estado != 'CANCELADA'
+                    ORDER BY r.enviado_en DESC
+                    LIMIT 15
+                """)
+                for r_res in (cursor.fetchall() or []):
+                    ini_loc = _utc_a_local(r_res.get("inicio"))
+                    fin_loc = _utc_a_local(r_res.get("fin"))
+                    env_loc = _utc_a_local(r_res.get("enviado_en"))
+                    prog_loc = _utc_a_local(r_res.get("enviar_en"))
+                    recordatorios.append({
+                        "id": f"res-{r_res['id']}",
+                        "evento_id": f"res-{r_res['reservacion_id']}",
+                        "tipo": str(r_res.get("canal") or "SIPREF").lower(),
+                        "antencion_valor": r_res.get("anticipacion") or 0,
+                        "antencion_unidad": str(r_res.get("unidad") or "minutos").lower(),
+                        "estado": "enviado",
+                        "fecha_programada": prog_loc.strftime("%Y-%m-%d %H:%M:%S") if prog_loc else None,
+                        "fecha_envio": env_loc.strftime("%Y-%m-%d %H:%M:%S") if env_loc else None,
+                        "nombre_evento": r_res.get("nombre_evento") or "Reservación",
+                        "aula_nombre": r_res.get("espacio_nombre") or r_res.get("espacio_id") or "",
+                        "responsable": r_res.get("responsable") or "",
+                        "hora_inicio": ini_loc.strftime("%H:%M") if ini_loc else None,
+                        "hora_fin": fin_loc.strftime("%H:%M") if fin_loc else None,
+                        "origen": "SIPREF Reservas",
+                    })
+            except Exception as e_rr_noti:
+                print(f"Advertencia listando recordatorios de SIPREF Reservas: {e_rr_noti}")
+
+            recordatorios.sort(key=lambda x: str(x.get("fecha_envio") or x.get("fecha_programada") or ""), reverse=True)
+
             return {
                 "eventos_hoy": eventos_hoy,
-                "recordatorios": recordatorios,
+                "recordatorios": recordatorios[:20],
                 "total_hoy": len(eventos_hoy)
             }
     finally:

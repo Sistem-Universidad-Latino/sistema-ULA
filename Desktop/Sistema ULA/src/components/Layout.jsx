@@ -210,20 +210,57 @@ export default function Layout() {
           });
         }
 
-        // 3. Avisos y recordatorios internos SIPREF
+        // 3. Avisos y recordatorios internos SIPREF (SIPREF + SIPREF Reservas)
         const listaRec = dataEv.recordatorios || dataEv.recordatorios_recientes;
         if (Array.isArray(listaRec)) {
+          let vistos = [];
+          try {
+            vistos = JSON.parse(localStorage.getItem('sipref_recordatorios_mostrados') || '[]');
+            if (!Array.isArray(vistos)) vistos = [];
+          } catch {
+            vistos = [];
+          }
+          const vistosSet = new Set(vistos.map(String));
+          let huboNuevosAvisos = false;
+
           listaRec.forEach(rec => {
+            const recIdStr = String(rec.id);
+            const esSipref = !rec.tipo || ['sipref', 'interno', 'ambos', 'sistema'].includes(String(rec.tipo).toLowerCase());
             nuevasNotis.push({
-              id: `rec-${rec.id}`,
+              id: `rec-${recIdStr}`,
               titulo: `Recordatorio: ${rec.nombre_evento}`,
-              subtitulo: `Aula ${rec.aula_nombre} (${String(rec.hora_inicio).slice(0, 5)}) · ${rec.antencion_valor} ${rec.antencion_unidad} antes`,
+              subtitulo: `Aula ${rec.aula_nombre} (${String(rec.hora_inicio || '').slice(0, 5)}) · ${rec.antencion_valor} ${rec.antencion_unidad} antes`,
               tipo: 'recordatorio',
               fecha: fechaActualStr,
               link: '/calendarios',
               state: { tab: 'agenda' }
             });
+
+            // Mostrar aviso emergente en tiempo real la primera vez que llega un recordatorio SIPREF disparado
+            if (esSipref && rec.estado === 'enviado' && !vistosSet.has(recIdStr)) {
+              vistosSet.add(recIdStr);
+              huboNuevosAvisos = true;
+              Swal.fire({
+                toast: true,
+                position: 'top-end',
+                icon: 'info',
+                title: `⏰ Recordatorio: ${rec.nombre_evento}`,
+                text: `Aula ${rec.aula_nombre} · ${String(rec.hora_inicio || '').slice(0, 5)} hrs (${rec.antencion_valor} ${rec.antencion_unidad} antes)`,
+                showConfirmButton: false,
+                timer: 8000,
+                timerProgressBar: true,
+              });
+            }
           });
+
+          if (huboNuevosAvisos) {
+            try {
+              localStorage.setItem(
+                'sipref_recordatorios_mostrados',
+                JSON.stringify(Array.from(vistosSet).slice(-100))
+              );
+            } catch {}
+          }
         }
 
         // Deduplicar notificaciones
@@ -246,6 +283,9 @@ export default function Layout() {
     };
 
     cargarExamenesHoy();
+    // Consultar periódicamente cada 20 segundos para disparar avisos en tiempo real sin recargar la página
+    const intervaloNotis = setInterval(cargarExamenesHoy, 20000);
+    return () => clearInterval(intervaloNotis);
   }, [usuario.id]);
 
   // 3. Consultar solicitudes de acceso pendientes de SIPREF Reservas al montar y cada 30s
