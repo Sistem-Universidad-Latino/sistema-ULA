@@ -1541,15 +1541,18 @@ export default function AgendaEventos({ aulasList = [] }) {
               <p className="text-slate-400 font-bold uppercase text-[10px]">Historial de Auditoría</p>
               {Array.isArray(eventoDetalle.historial) && eventoDetalle.historial.length > 0 ? (
                 <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                  {eventoDetalle.historial.map((h, idx) => (
-                    <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-[11px]">
-                      <div className="flex justify-between font-bold text-slate-700">
-                        <span>{h.accion} — {h.usuario}</span>
-                        <span className="text-slate-400 font-normal">{h.fecha ? String(h.fecha).replace('T', ' ').slice(0, 16) : ''}</span>
+                  {eventoDetalle.historial.map((h, idx) => {
+                    const detalleLimpio = String(h.detalles || '').replace(/^C[óo]digo:\s*[^\s.]+\.?\s*/i, '').trim();
+                    return (
+                      <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-[11px]">
+                        <div className="flex justify-between font-bold text-slate-700">
+                          <span>{h.accion} — {h.usuario}</span>
+                          <span className="text-slate-400 font-normal">{h.fecha ? String(h.fecha).replace('T', ' ').slice(0, 16) : ''}</span>
+                        </div>
+                        {detalleLimpio && <p className="text-slate-500 mt-1">{detalleLimpio}</p>}
                       </div>
-                      {h.detalles && <p className="text-slate-500 mt-1">{h.detalles}</p>}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-slate-400 italic">Creado el {eventoDetalle.created_at || 'recreado'}.</p>

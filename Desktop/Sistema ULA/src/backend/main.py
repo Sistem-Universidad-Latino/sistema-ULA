@@ -9564,7 +9564,7 @@ def api_obtener_evento(evento_id: str):
                         "id": 1,
                         "usuario": ev.get("usuario_creador") or "SIPREF Reservas",
                         "accion": "Creado en SIPREF Reservas",
-                        "detalles": f"Código: {ev.get('codigo') or res_uuid}.",
+                        "detalles": "",
                         "fecha": ev.get("created_at") or ev.get("fecha"),
                     }
                 ]
